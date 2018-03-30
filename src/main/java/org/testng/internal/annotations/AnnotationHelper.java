@@ -4,15 +4,12 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.Map;
 
 import org.testng.ITestNGMethod;
 import org.testng.annotations.IAnnotation;
 import org.testng.annotations.IConfigurationAnnotation;
 import org.testng.annotations.IDataProviderAnnotation;
-import org.testng.annotations.IExpectedExceptionsAnnotation;
 import org.testng.annotations.IFactoryAnnotation;
 import org.testng.annotations.IParametersAnnotation;
 import org.testng.annotations.ITestAnnotation;
@@ -31,6 +28,29 @@ import org.testng.xml.XmlTest;
  * @author cbeust
  */
 public class AnnotationHelper {
+
+  private static final Class[] ALL_ANNOTATIONS = new Class[] {
+      ITestAnnotation.class,
+      IBeforeClass.class, IAfterClass.class,
+      IBeforeMethod.class, IAfterMethod.class,
+      IDataProviderAnnotation.class,
+      IFactoryAnnotation.class, IParametersAnnotation.class,
+      IBeforeSuite.class, IAfterSuite.class,
+      IBeforeTest.class, IAfterTest.class,
+      IBeforeGroups.class, IAfterGroups.class
+  };
+
+  private static final Class<? extends IAnnotation>[] CONFIGURATION_CLASSES = new Class[] {
+      IBeforeSuite.class, IAfterSuite.class,
+      IBeforeTest.class, IAfterTest.class,
+      IBeforeGroups.class, IAfterGroups.class,
+      IBeforeClass.class, IAfterClass.class,
+      IBeforeMethod.class, IAfterMethod.class
+  };
+
+  private AnnotationHelper() {
+    //Utility class.defeat instantiation.
+  }
 
   public static ITestAnnotation findTest(IAnnotationFinder finder, Class<?> cls) {
     return finder.findAnnotation(cls, ITestAnnotation.class);
@@ -56,62 +76,33 @@ public class AnnotationHelper {
     return finder.findAnnotation(ctor, ITestAnnotation.class);
   }
 
-  public static IConfigurationAnnotation findConfiguration(IAnnotationFinder finder, ConstructorOrMethod com) {
-    if (com.getMethod() != null) {
-      return findConfiguration(finder, com.getMethod());
-    }
-    if (com.getConstructor() != null) {
-      return findConfiguration(finder, com.getConstructor());
-    }
-    return null;
-  }
+  public static IConfigurationAnnotation findConfiguration(IAnnotationFinder finder, ConstructorOrMethod m) {
+    IConfigurationAnnotation result = null;
+    IConfigurationAnnotation bs = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeSuite.class);
+    IConfigurationAnnotation as = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterSuite.class);
+    IConfigurationAnnotation bt = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeTest.class);
+    IConfigurationAnnotation at = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterTest.class);
+    IConfigurationAnnotation bg = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeGroups.class);
+    IConfigurationAnnotation ag = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterGroups.class);
+    IConfigurationAnnotation bc = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeClass.class);
+    IConfigurationAnnotation ac = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterClass.class);
+    IConfigurationAnnotation bm = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeMethod.class);
+    IConfigurationAnnotation am = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterMethod.class);
 
-    public static IConfigurationAnnotation findConfiguration(IAnnotationFinder finder, Constructor ctor) {
-    IConfigurationAnnotation result = finder.findAnnotation(ctor, IConfigurationAnnotation.class);
-    if (result == null) {
-      IConfigurationAnnotation bs = (IConfigurationAnnotation) finder.findAnnotation(ctor, IBeforeSuite.class);
-      IConfigurationAnnotation as = (IConfigurationAnnotation) finder.findAnnotation(ctor, IAfterSuite.class);
-      IConfigurationAnnotation bt = (IConfigurationAnnotation) finder.findAnnotation(ctor, IBeforeTest.class);
-      IConfigurationAnnotation at = (IConfigurationAnnotation) finder.findAnnotation(ctor, IAfterTest.class);
-      IConfigurationAnnotation bg = (IConfigurationAnnotation) finder.findAnnotation(ctor, IBeforeGroups.class);
-      IConfigurationAnnotation ag = (IConfigurationAnnotation) finder.findAnnotation(ctor, IAfterGroups.class);
-      IConfigurationAnnotation bc = (IConfigurationAnnotation) finder.findAnnotation(ctor, IBeforeClass.class);
-      IConfigurationAnnotation ac = (IConfigurationAnnotation) finder.findAnnotation(ctor, IAfterClass.class);
-      IConfigurationAnnotation bm = (IConfigurationAnnotation) finder.findAnnotation(ctor, IBeforeMethod.class);
-      IConfigurationAnnotation am = (IConfigurationAnnotation) finder.findAnnotation(ctor, IAfterMethod.class);
-
-      if (bs != null || as != null || bt != null || at != null || bg != null || ag != null
-          || bc != null || ac != null || bm != null || am != null)
-      {
-        result = createConfiguration(bs, as, bt, at, bg, ag, bc, ac, bm, am);
-      }
+    if (bs != null || as != null || bt != null || at != null || bg != null || ag != null
+            || bc != null || ac != null || bm != null || am != null) {
+      result = createConfiguration(bs, as, bt, at, bg, ag, bc, ac, bm, am);
     }
 
     return result;
+  }
+
+  public static IConfigurationAnnotation findConfiguration(IAnnotationFinder finder, Constructor ctor) {
+    return findConfiguration(finder, new ConstructorOrMethod(ctor));
   }
 
   public static IConfigurationAnnotation findConfiguration(IAnnotationFinder finder, Method m) {
-    IConfigurationAnnotation result = finder.findAnnotation(m, IConfigurationAnnotation.class);
-    if (result == null) {
-      IConfigurationAnnotation bs = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeSuite.class);
-      IConfigurationAnnotation as = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterSuite.class);
-      IConfigurationAnnotation bt = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeTest.class);
-      IConfigurationAnnotation at = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterTest.class);
-      IConfigurationAnnotation bg = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeGroups.class);
-      IConfigurationAnnotation ag = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterGroups.class);
-      IConfigurationAnnotation bc = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeClass.class);
-      IConfigurationAnnotation ac = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterClass.class);
-      IConfigurationAnnotation bm = (IConfigurationAnnotation) finder.findAnnotation(m, IBeforeMethod.class);
-      IConfigurationAnnotation am = (IConfigurationAnnotation) finder.findAnnotation(m, IAfterMethod.class);
-
-      if (bs != null || as != null || bt != null || at != null || bg != null || ag != null
-          || bc != null || ac != null || bm != null || am != null)
-      {
-        result = createConfiguration(bs, as, bt, at, bg, ag, bc, ac, bm, am);
-      }
-    }
-
-    return result;
+    return findConfiguration(finder, new ConstructorOrMethod(m));
   }
 
   private static IConfigurationAnnotation createConfiguration(IConfigurationAnnotation bs, IConfigurationAnnotation as,
@@ -178,25 +169,7 @@ public class AnnotationHelper {
     result.setTimeOut(bs.getTimeOut());
   }
 
-  private static final Class[] ALL_ANNOTATIONS = new Class[] {
-    ITestAnnotation.class, IConfigurationAnnotation.class,
-    IBeforeClass.class, IAfterClass.class,
-    IBeforeMethod.class, IAfterMethod.class,
-    IDataProviderAnnotation.class, IExpectedExceptionsAnnotation.class,
-    IFactoryAnnotation.class, IParametersAnnotation.class,
-    IBeforeSuite.class, IAfterSuite.class,
-    IBeforeTest.class, IAfterTest.class,
-    IBeforeGroups.class, IAfterGroups.class
-  };
 
-  public static final Class[] CONFIGURATION_CLASSES = new Class[] {
-    IConfigurationAnnotation.class,
-    IBeforeSuite.class, IAfterSuite.class,
-    IBeforeTest.class, IAfterTest.class,
-    IBeforeGroups.class, IAfterGroups.class,
-    IBeforeClass.class, IAfterClass.class,
-    IBeforeMethod.class, IAfterMethod.class
-  };
 
   public static Class[] getAllAnnotations() {
     return ALL_ANNOTATIONS;
@@ -279,20 +252,19 @@ public class AnnotationHelper {
     catch (SecurityException e) {
       e.printStackTrace();
     }
-    ITestNGMethod[] result = vResult.values().toArray(new ITestNGMethod[vResult.size()]);
-
-  //    for (Method m : result) {
-  //      ppp("   METHOD FOUND: " + m);
-  //    }
-
-      return result;
+    return vResult.values().toArray(new ITestNGMethod[vResult.size()]);
     }
 
-  public static Annotation findAnnotationSuperClasses(Class<?> annotationClass, Class c) {
+  public static <A extends Annotation> A  findAnnotationSuperClasses(Class<A> annotationClass, Class parameterClass) {
+    Class c = parameterClass;
     while (c != null) {
       Annotation result = c.getAnnotation(annotationClass);
-      if (result != null) return result;
-      else c = c.getSuperclass();
+      if (result != null) {
+        return (A) result;
+      }
+      else {
+        c = c.getSuperclass();
+      }
     }
     return null;
   }
@@ -311,7 +283,17 @@ public class AnnotationHelper {
 
   private static boolean isAnnotationPresent(IAnnotationFinder annotationFinder, Method m,
       Class<? extends IAnnotation> annotationClass) {
-    return annotationFinder.findAnnotation(m, annotationClass) != null;
+    if (!annotationClass.equals(IConfigurationAnnotation.class)) {
+      return annotationFinder.findAnnotation(m, annotationClass) != null;
+    }
+    boolean found = false;
+    for (Class clazz : CONFIGURATION_CLASSES) {
+      if (annotationFinder.findAnnotation(m, clazz) != null) {
+        found = true;
+        break;
+      }
+    }
+    return found;
   }
 
   private static boolean isAnnotationPresent(IAnnotationFinder annotationFinder, Class<?> cls,
@@ -324,7 +306,7 @@ public class AnnotationHelper {
    * but without its class
    */
   private static String createMethodKey(Method m) {
-    StringBuffer result = new StringBuffer(m.getName());
+    StringBuilder result = new StringBuilder(m.getName());
     for (Class paramClass : m.getParameterTypes()) {
       result.append(' ').append(paramClass.toString());
     }

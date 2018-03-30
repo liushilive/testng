@@ -11,6 +11,8 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import test.thread.parallelization.TestNgRunStateTracker.EventLog;
 
@@ -77,6 +79,7 @@ import static test.thread.parallelization.TestNgRunStateTracker.reset;
  * 10) There are no method exclusions
  */
 public class ParallelByMethodsTestCase1Scenario2 extends BaseParallelizationTest {
+
     private static final String SUITE_A = "TestSuiteA";
     private static final String SUITE_B = "TestSuiteB";
     private static final String SUITE_C = "TestSuiteC";
@@ -89,9 +92,6 @@ public class ParallelByMethodsTestCase1Scenario2 extends BaseParallelizationTest
     private static final String SUITE_C_TEST_A = "TestSuiteC-ThreeTestClassTest";
     private static final String SUITE_C_TEST_B = "TestSuiteC-TwoTestClassTest";
     private static final String SUITE_C_TEST_C = "TestSuiteC-FourTestClassTest";
-
-    private Map<String, Long> expectedSuiteExecutionTimes = new HashMap<>();
-    private Map<String, Long> expectedTestExecutionTimes = new HashMap<>();
 
     private Map<String, List<EventLog>> suiteEventLogsMap = new HashMap<>();
     private Map<String, List<EventLog>> testEventLogsMap = new HashMap<>();
@@ -199,29 +199,51 @@ public class ParallelByMethodsTestCase1Scenario2 extends BaseParallelizationTest
             }
         }
 
-        addParams(suiteOne, SUITE_A, SUITE_A_TEST_A, "1");
+        addParams(suiteOne, SUITE_A, SUITE_A_TEST_A, "100");
 
-        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_A, "1");
-        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_B, "1");
+        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_A, "100");
+        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_B, "100");
 
-        addParams(suiteThree, SUITE_C, SUITE_C_TEST_A, "1");
-        addParams(suiteThree, SUITE_C, SUITE_C_TEST_B, "1");
-        addParams(suiteThree, SUITE_C, SUITE_C_TEST_C, "1");
+        addParams(suiteThree, SUITE_C, SUITE_C_TEST_A, "100");
+        addParams(suiteThree, SUITE_C, SUITE_C_TEST_B, "100");
+        addParams(suiteThree, SUITE_C, SUITE_C_TEST_C, "100");
 
         TestNG tng = create(suiteOne, suiteTwo, suiteThree);
         tng.addListener((ITestNGListener) new TestNgRunStateListener());
 
+        System.out.println("Beginning ParallelByMethodsTestCase1Scenario2. This test scenario consists of three " +
+                "sequentially executed suites with 1, 2 and 3 tests respectively. One test for a suite consists of a " +
+                "single test class while the rest shall consist of more than one test class. There are no " +
+                "dependencies, data providers or factories.");
+
+        System.out.println("Suite: " + SUITE_A + ", Test: " + SUITE_A_TEST_A + ", Test classes: " +
+                TestClassAFiveMethodsWithNoDepsSample.class.getCanonicalName() +
+                        ", " + TestClassCSixMethodsWithNoDepsSample.class.getCanonicalName() + ". Thread count: 3");
+
+        System.out.println("Suite: " + SUITE_B + ", Test: " + SUITE_B_TEST_A + ", Test class: " +
+                TestClassEFiveMethodsWithNoDepsSample.class.getCanonicalName() + ". Thread count: 6");
+
+        System.out.println("Suite " + SUITE_B + ", Test: " + SUITE_B_TEST_B + ", Test classes: " +
+                TestClassDThreeMethodsWithNoDepsSample.class + ", " +
+                TestClassBFourMethodsWithNoDepsSample.class + ", " +
+                TestClassFSixMethodsWithNoDepsSample.class + ". Thread count: 20");
+
+        System.out.println("Suite: " + SUITE_C + ", Test: " + SUITE_C_TEST_A + ", Test classes: " +
+                TestClassGThreeMethodsWithNoDepsSample.class.getCanonicalName() + ", " +
+                TestClassHFourMethodsWithNoDepsSample.class.getCanonicalName() + ", " +
+                TestClassIFiveMethodsWithNoDepsSample.class + ". Thread count: 10");
+
+        System.out.println("Suite: " + SUITE_C + ", Test: " + SUITE_C_TEST_B + ", Test classes: " +
+                TestClassJFourMethodsWithNoDepsSample.class.getCanonicalName() + ", " +
+                TestClassKFiveMethodsWithNoDepsSample.class + ". Thread count: 5");
+
+        System.out.println("Suite: " + SUITE_C + ", Test: " + SUITE_C_TEST_C + ", Test classes: " +
+                TestClassLThreeMethodsWithNoDepsSample.class.getCanonicalName() + ", " +
+                TestClassMFourMethodsWithNoDepsSample.class.getCanonicalName() + ", " +
+                TestClassNFiveMethodsWithNoDepsSample.class.getCanonicalName() + ", " +
+                TestClassOSixMethodsWithNoDepsSample.class.getCanonicalName() + ". Thread count: 12.");
+
         tng.run();
-
-        expectedSuiteExecutionTimes.put(SUITE_A, 10_000L);
-        expectedSuiteExecutionTimes.put(SUITE_B, 7_000L);
-        expectedSuiteExecutionTimes.put(SUITE_C, 16_000L);
-
-        expectedTestExecutionTimes.put(SUITE_B_TEST_A, 3_000L);
-        expectedTestExecutionTimes.put(SUITE_B_TEST_B, 3_000L);
-        expectedTestExecutionTimes.put(SUITE_C_TEST_A, 5_000L);
-        expectedTestExecutionTimes.put(SUITE_C_TEST_B, 5_000L);
-        expectedTestExecutionTimes.put(SUITE_C_TEST_C, 5_000L);
 
         suiteLevelEventLogs = getAllSuiteLevelEventLogs();
         testLevelEventLogs = getAllTestLevelEventLogs();

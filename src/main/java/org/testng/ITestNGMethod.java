@@ -4,8 +4,6 @@ package org.testng;
 import org.testng.internal.ConstructorOrMethod;
 import org.testng.xml.XmlTest;
 
-import java.io.Serializable;
-import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -14,10 +12,8 @@ import java.util.concurrent.Callable;
  * Describes a TestNG annotated method and the instance on which it will be invoked.
  *
  * This interface is not meant to be implemented by users.
- *
- * @author Cedric Beust, May 3, 2004
  */
-public interface ITestNGMethod extends Comparable, Serializable, Cloneable {
+public interface ITestNGMethod extends Cloneable {
 
   /**
    * @return The real class on which this method was declared
@@ -36,29 +32,11 @@ public interface ITestNGMethod extends Comparable, Serializable, Cloneable {
   void setTestClass(ITestClass cls);
 
   /**
-   * @return the corresponding Java test method.
-   * @deprecated This method is deprecated and can now return null. Use
-   * getConstructorOrMethod() instead.
-   */
-  @Deprecated
-  Method getMethod();
-
-  /**
    * Returns the method name. This is needed for serialization because
    * methods are not Serializable.
    * @return the method name.
    */
   String getMethodName();
-
-  /**
-   * @return All the instances the methods will be invoked upon.
-   * This will typically be an array of one object in the absence
-   * of an @Factory annotation.
-   *
-   * @deprecated Use getInstance().
-   */
-  @Deprecated
-  Object[] getInstances();
 
   Object getInstance();
 
@@ -83,13 +61,13 @@ public interface ITestNGMethod extends Comparable, Serializable, Cloneable {
    * If a group was not found.
    */
   String getMissingGroup();
-  public void setMissingGroup(String group);
+  void setMissingGroup(String group);
 
   /**
    * Before and After groups
    */
-  public String[] getBeforeGroups();
-  public String[] getAfterGroups();
+  String[] getBeforeGroups();
+  String[] getAfterGroups();
 
   /**
    * @return The methods  this method depends on, possibly added to the methods
@@ -166,14 +144,6 @@ public interface ITestNGMethod extends Comparable, Serializable, Cloneable {
   void setInvocationCount(int count);
 
   /**
-   * @return the total number of thimes this method needs to be invoked, including possible
-   *         clones of this method - this is relevant when threadPoolSize is bigger than 1
-   *         where each clone of this method is only invoked once individually, i.e.
-   *         {@link org.testng.ITestNGMethod#getInvocationCount()} would always return 1.
-   */
-  int getTotalInvocationCount();
-
-  /**
    * @return the success percentage for this method (between 0 and 100).
    */
   int getSuccessPercentage();
@@ -208,31 +178,31 @@ public interface ITestNGMethod extends Comparable, Serializable, Cloneable {
 
   boolean getEnabled();
 
-  public String getDescription();
+  String getDescription();
   void setDescription(String description);
 
-  public void incrementCurrentInvocationCount();
-  public int getCurrentInvocationCount();
-  public void setParameterInvocationCount(int n);
-  public int getParameterInvocationCount();
+  void incrementCurrentInvocationCount();
+  int getCurrentInvocationCount();
+  void setParameterInvocationCount(int n);
+  int getParameterInvocationCount();
   void setMoreInvocationChecker(Callable<Boolean> moreInvocationChecker);
   boolean hasMoreInvocation();
 
-  public ITestNGMethod clone();
+  ITestNGMethod clone();
 
-  public IRetryAnalyzer getRetryAnalyzer();
-  public void setRetryAnalyzer(IRetryAnalyzer retryAnalyzer);
+  IRetryAnalyzer getRetryAnalyzer();
+  void setRetryAnalyzer(IRetryAnalyzer retryAnalyzer);
 
-  public boolean skipFailedInvocations();
-  public void setSkipFailedInvocations(boolean skip);
+  boolean skipFailedInvocations();
+  void setSkipFailedInvocations(boolean skip);
 
   /**
    * The time under which all invocationCount methods need to complete by.
    */
-  public long getInvocationTimeOut();
+  long getInvocationTimeOut();
 
-  public boolean ignoreMissingDependencies();
-  public void setIgnoreMissingDependencies(boolean ignore);
+  boolean ignoreMissingDependencies();
+  void setIgnoreMissingDependencies(boolean ignore);
 
   /**
    * Which invocation numbers of this method should be used (only applicable
@@ -240,32 +210,32 @@ public interface ITestNGMethod extends Comparable, Serializable, Cloneable {
    * returned from the data provider.  These values are read from the XML file in
    * the <include invocationNumbers="..."> tag.
    */
-  public List<Integer> getInvocationNumbers();
-  public void setInvocationNumbers(List<Integer> numbers);
+  List<Integer> getInvocationNumbers();
+  void setInvocationNumbers(List<Integer> numbers);
 
   /**
    * The list of invocation numbers that failed, which is only applicable for
    * methods that have a data provider.
    */
-  public void addFailedInvocationNumber(int number);
-  public List<Integer> getFailedInvocationNumbers();
+  void addFailedInvocationNumber(int number);
+  List<Integer> getFailedInvocationNumbers();
 
   /**
    * The scheduling priority. Lower priorities get scheduled first.
    */
-  public int getPriority();
-  public void setPriority(int priority);
+  int getPriority();
+  void setPriority(int priority);
 
   /**
    * @return the XmlTest this method belongs to.
    */
-  public XmlTest getXmlTest();
+  XmlTest getXmlTest();
 
   ConstructorOrMethod getConstructorOrMethod();
 
   /**
    * @return the parameters found in the include tag, if any
-   * @param test
+   * @param test - The {@link XmlTest} object.
    */
   Map<String, String> findMethodParameters(XmlTest test);
   
@@ -273,5 +243,5 @@ public interface ITestNGMethod extends Comparable, Serializable, Cloneable {
    * getRealClass().getName() + "." +  getMethodName()
    * @return qualified name for this method
    */
-  public String getQualifiedName();
+  String getQualifiedName();
 }

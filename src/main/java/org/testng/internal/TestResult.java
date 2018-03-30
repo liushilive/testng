@@ -8,6 +8,7 @@ import org.testng.ITestContext;
 import org.testng.ITestNGMethod;
 import org.testng.ITestResult;
 import org.testng.Reporter;
+import org.testng.TestNGException;
 import org.testng.collections.Objects;
 
 import java.lang.reflect.InvocationTargetException;
@@ -15,30 +16,32 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Set;
 
-
 /**
  * This class represents the result of a test.
- *
- * @author Cedric Beust, May 2, 2004
  */
 public class TestResult implements ITestResult, IAlterTestName {
 
-  private static final long serialVersionUID = 6273017418233324556L;
   private IClass m_testClass = null;
   private ITestNGMethod m_method = null;
-  private int m_status = -1;
+  private int m_status = CREATED;
   private Throwable m_throwable = null;
   private long m_startMillis = 0;
   private long m_endMillis = 0;
   private String m_name = null;
   private String m_host;
-  transient private Object[] m_parameters = {};
-  transient private Object m_instance;
+  private Object[] m_parameters = {};
+  private Object m_instance;
   private String m_instanceName;
   private ITestContext m_context;
+  private int parameterIndex;
 
   public TestResult() {
 
+  }
+
+  public TestResult(Object instance, ITestNGMethod method, Throwable throwable, ITestContext context) {
+    long time = System.currentTimeMillis();
+    init(method.getTestClass(), instance, method, throwable, time, time, context);
   }
 
   public TestResult(IClass testClass,
@@ -230,7 +233,8 @@ public class TestResult implements ITestResult, IAlterTestName {
       case SKIP: return "SKIP";
       case SUCCESS_PERCENTAGE_FAILURE: return "SUCCESS WITHIN PERCENTAGE";
       case STARTED: return "STARTED";
-      default: throw new RuntimeException();
+      case CREATED: return "CREATED";
+      default: throw new TestNGException("Encountered an un-defined test status of [" + status + "].");
     }
   }
 
@@ -251,13 +255,11 @@ public class TestResult implements ITestResult, IAlterTestName {
   @Override
   public void setParameters(Object[] parameters) {
     m_parameters = new Object[parameters.length];
-    for (int i=0; i<parameters.length; i++) {
+    for (int i = 0; i < parameters.length; i++) {
       // Copy parameter if possible because user may change it later
       if (parameters[i] instanceof Cloneable) {
-        Method clone;
         try {
-          clone = parameters[i].getClass().getDeclaredMethod("clone");
-          clone.setAccessible(true);
+          Method clone = parameters[i].getClass().getDeclaredMethod("clone");
           m_parameters[i] = clone.invoke(parameters[i]);
         } catch (NoSuchMethodException | InvocationTargetException | IllegalAccessException | SecurityException e) {
           m_parameters[i] = parameters[i];
@@ -273,7 +275,7 @@ public class TestResult implements ITestResult, IAlterTestName {
     return m_instance;
   }
 
-  private IAttributes m_attributes = new Attributes();
+  private final IAttributes m_attributes = new Attributes();
 
   @Override
   public Object getAttribute(String name) {
@@ -294,25 +296,19 @@ public class TestResult implements ITestResult, IAlterTestName {
   public Object removeAttribute(String name) {
     return m_attributes.removeAttribute(name);
   }
-  
+
   @Override
   public ITestContext getTestContext() {
 	  return m_context;
   }
-  
+
   public void setContext(ITestContext context) {
 	  m_context = context;
   }
 
   @Override
   public int compareTo(ITestResult comparison) {
-	  if( getStartMillis() > comparison.getStartMillis() ) {
-		  return 1;
-	  } else if( getStartMillis() < comparison.getStartMillis()) {
-		  return -1;
-	  } else {
-		  return 0;
-	  }
+    return Long.compare(getStartMillis(), comparison.getStartMillis());
   }
 
   @Override
@@ -323,6 +319,14 @@ public class TestResult implements ITestResult, IAlterTestName {
   @Override
   public void setTestName(String name) {
     m_name = name;
+  }
+
+  void setParameterIndex(int parameterIndex) {
+    this.parameterIndex = parameterIndex;
+  }
+
+  public int getParameterIndex() {
+    return parameterIndex;
   }
 }
 

@@ -2,8 +2,10 @@ package test.thread.parallelization;
 
 import org.testng.ITestNGListener;
 import org.testng.TestNG;
+
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
+
 import org.testng.xml.XmlSuite;
 
 import test.thread.parallelization.TestNgRunStateTracker.EventLog;
@@ -19,6 +21,8 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import static org.testng.Assert.assertEquals;
 
@@ -71,9 +75,6 @@ public class ParallelByMethodsTestCase2Scenario1 extends BaseParallelizationTest
     private static final String SUITE_B_TEST_B = "TestSuiteB-ThreeTestClassTest";
 
     private static final int THREAD_POOL_SIZE = 2;
-
-    private Map<String, Long> expectedSuiteExecutionTimes = new HashMap<>();
-    private Map<String, Long> expectedTestExecutionTimes = new HashMap<>();
 
     private Map<String, List<EventLog>> testEventLogsMap = new HashMap<>();
 
@@ -128,23 +129,33 @@ public class ParallelByMethodsTestCase2Scenario1 extends BaseParallelizationTest
         suiteTwo.setParallel(XmlSuite.ParallelMode.METHODS);
         suiteTwo.setThreadCount(14);
 
+        addParams(suiteOne, SUITE_A, SUITE_A_TEST_A, "100");
 
-        addParams(suiteOne, SUITE_A, SUITE_A_TEST_A, "1");
-
-        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_A, "1");
-        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_B, "1");
+        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_A, "100");
+        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_B, "100");
 
         TestNG tng = create(suiteOne, suiteTwo);
         tng.setSuiteThreadPoolSize(2);
         tng.addListener((ITestNGListener) new TestNgRunStateListener());
 
+        System.out.println("Beginning ParallelByMethodsTestCase2Scenario1. This test scenario consists of two " +
+                "suites with 1 and 2 tests respectively. The suites run in parallel and the thread pool size is 2. " +
+                "One test for a suite shall consist of a single test class while the rest shall consist of more than " +
+                "one test class. There are no dependencies, data providers or factories.");
+
+        System.out.println("Suite: " + SUITE_A + ", Test: " + SUITE_A_TEST_A + ", Test classes: " +
+                TestClassAFiveMethodsWithNoDepsSample.class.getCanonicalName() + ", " +
+                TestClassCSixMethodsWithNoDepsSample.class.getCanonicalName() + ". Thread count: 3");
+
+        System.out.println("Suite: " + SUITE_B + ", Test: " + SUITE_B_TEST_A + ", Test class: " +
+                TestClassEFiveMethodsWithNoDepsSample.class.getCanonicalName() + ". Thread count: 14");
+
+        System.out.println("Suite: " + SUITE_B + ", Test: " + SUITE_B_TEST_B + ", Test classes: " +
+                TestClassDThreeMethodsWithNoDepsSample.class + ", " +
+                TestClassBFourMethodsWithNoDepsSample.class + ", " +
+                TestClassFSixMethodsWithNoDepsSample.class + ". Thread count: 14");
+
         tng.run();
-
-        expectedSuiteExecutionTimes.put(SUITE_A, 10_000L);
-        expectedSuiteExecutionTimes.put(SUITE_B, 7_000L);
-
-        expectedTestExecutionTimes.put(SUITE_B_TEST_A, 3_000L);
-        expectedTestExecutionTimes.put(SUITE_B_TEST_B, 3_000L);
 
         suiteLevelEventLogs = getAllSuiteLevelEventLogs();
         testLevelEventLogs = getAllTestLevelEventLogs();
@@ -322,8 +333,6 @@ public class ParallelByMethodsTestCase2Scenario1 extends BaseParallelizationTest
                         getAllSuiteListenerStartEventLogs().get(0).getThreadId() + ". Test method level event logs: " +
                         testMethodLevelEventLogs);
 
-        verifyEventsForTestMethodsRunInTheSameThread(TestClassAFiveMethodsWithNoDepsSample.class, SUITE_A,
-                SUITE_A_TEST_A);
         verifyEventsForTestMethodsRunInTheSameThread(TestClassAFiveMethodsWithNoDepsSample.class, SUITE_A,
                 SUITE_A_TEST_A);
         verifyEventsForTestMethodsRunInTheSameThread(TestClassCSixMethodsWithNoDepsSample.class, SUITE_A,

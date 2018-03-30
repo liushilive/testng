@@ -1,7 +1,5 @@
 package test.thread.parallelization;
 
-import com.google.common.collect.Multimap;
-
 import org.testng.ITestNGListener;
 import org.testng.TestNG;
 
@@ -11,12 +9,16 @@ import org.testng.annotations.Test;
 import org.testng.xml.XmlSuite;
 
 import test.thread.parallelization.TestNgRunStateTracker.EventLog;
-import test.thread.parallelization.sample.TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample;
+import test.thread.parallelization.sample.TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample;
 
-import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import static org.testng.Assert.assertEquals;
+
 import static test.thread.parallelization.TestNgRunStateTracker.getAllSuiteAndTestLevelEventLogs;
 import static test.thread.parallelization.TestNgRunStateTracker.getAllSuiteLevelEventLogs;
 import static test.thread.parallelization.TestNgRunStateTracker.getAllTestLevelEventLogs;
@@ -26,7 +28,8 @@ import static test.thread.parallelization.TestNgRunStateTracker.getSuiteListener
 import static test.thread.parallelization.TestNgRunStateTracker.getTestListenerFinishEventLog;
 import static test.thread.parallelization.TestNgRunStateTracker.getTestListenerStartEventLog;
 import static test.thread.parallelization.TestNgRunStateTracker.getTestListenerStartThreadId;
-import static test.thread.parallelization.TestNgRunStateTracker.getTestMethodEventLogsForMethod;
+
+import static test.thread.parallelization.TestNgRunStateTracker.getTestMethodLevelEventLogsForTest;
 import static test.thread.parallelization.TestNgRunStateTracker.reset;
 
 /**
@@ -50,6 +53,7 @@ import static test.thread.parallelization.TestNgRunStateTracker.reset;
  * 7) There are no method exclusions
  */
 public class ParallelByMethodsTestCase3Scenario1 extends BaseParallelizationTest {
+
     private static final String SUITE = "SingleTestSuite";
     private static final String TEST = "SingleTestClassTest";
 
@@ -66,11 +70,7 @@ public class ParallelByMethodsTestCase3Scenario1 extends BaseParallelizationTest
 
     private Long testListenerOnStartThreadId;
 
-    private Multimap<Object, EventLog> testMethodAEventLogs;
-    private Multimap<Object, EventLog> testMethodBEventLogs;
-    private Multimap<Object, EventLog> testMethodCEventLogs;
-    private Multimap<Object, EventLog> testMethodDEventLogs;
-    private Multimap<Object, EventLog> testMethodEEventLogs;
+    private Map<String, Integer> expectedInvocationCounts = new HashMap<>();
 
     @BeforeClass
     public void setUp() {
@@ -80,13 +80,41 @@ public class ParallelByMethodsTestCase3Scenario1 extends BaseParallelizationTest
         suite.setParallel(XmlSuite.ParallelMode.METHODS);
         suite.setThreadCount(15);
 
-        createXmlTest(suite, TEST, TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class);
+        expectedInvocationCounts.put(
+                TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName() +
+                        ".testMethodA", 3);
 
-        addParams(suite, SUITE, TEST, "1", "paramOne,paramTwo,paramThree");
+        expectedInvocationCounts.put(
+                TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName() +
+                        ".testMethodB", 3);
+
+        expectedInvocationCounts.put(
+                TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName() +
+                        ".testMethodC", 3);
+
+        expectedInvocationCounts.put(
+                TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName() +
+                        ".testMethodD", 3);
+
+        expectedInvocationCounts.put(
+                TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName() +
+                        ".testMethodE", 3);
+
+        createXmlTest(suite, TEST, TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class);
+
+        addParams(suite, SUITE, TEST, "100", "paramOne,paramTwo,paramThree");
 
         TestNG tng = create(suite);
 
         tng.addListener((ITestNGListener)new TestNgRunStateListener());
+
+        System.out.println("Beginning ParallelByMethodsTestCase3Scenario1. This test scenario consists of a " +
+                "single suite with a single test consisting of a single test class with five methods with a data " +
+                "provider specifying 3 sets of data. There are no dependencies or factories.");
+
+        System.out.println("Suite: " + SUITE + ", Test: " + TEST + ", Test class: "
+                + TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName() +
+                ". Thread count: 15");
 
         tng.run();
 
@@ -94,17 +122,6 @@ public class ParallelByMethodsTestCase3Scenario1 extends BaseParallelizationTest
         testLevelEventLogs = getAllTestLevelEventLogs();
         suiteAndTestLevelEventLogs = getAllSuiteAndTestLevelEventLogs();
         testMethodLevelEventLogs = getAllTestMethodLevelEventLogs();
-
-        testMethodAEventLogs = getTestMethodEventLogsForMethod(SUITE, TEST,
-                TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName(), "testMethodA");
-        testMethodBEventLogs = getTestMethodEventLogsForMethod(SUITE, TEST,
-                TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName(), "testMethodB");
-        testMethodCEventLogs = getTestMethodEventLogsForMethod(SUITE, TEST,
-                TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName(), "testMethodC");
-        testMethodDEventLogs = getTestMethodEventLogsForMethod(SUITE, TEST,
-                TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName(), "testMethodD");
-        testMethodEEventLogs = getTestMethodEventLogsForMethod(SUITE, TEST,
-                TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class.getCanonicalName(), "testMethodE");
 
         suiteListenerOnStartEventLog = getSuiteListenerStartEventLog(SUITE);
         suiteListenerOnFinishEventLog = getSuiteListenerFinishEventLog(SUITE);
@@ -122,7 +139,7 @@ public class ParallelByMethodsTestCase3Scenario1 extends BaseParallelizationTest
                 suiteLevelEventLogs);
         assertEquals(testLevelEventLogs.size(), 2, "There should be 2 test level events logged for " + SUITE + ": " +
                 testLevelEventLogs);
-        assertEquals(testMethodLevelEventLogs.size(), 45, "There should be 15 test method level event logged for " +
+        assertEquals(testMethodLevelEventLogs.size(), 45, "There should be 45 test method level events logged for " +
                 SUITE + ": " + testMethodLevelEventLogs);
     }
 
@@ -153,13 +170,13 @@ public class ParallelByMethodsTestCase3Scenario1 extends BaseParallelizationTest
         verifyNumberOfInstancesOfTestClassForMethods(
                 SUITE,
                 TEST,
-                TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class,
+                TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class,
                 1);
 
         verifySameInstancesOfTestClassAssociatedWithMethods(
                 SUITE,
                 TEST,
-                TestClassFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class);
+                TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class);
     }
 
     //Verifies that all the test method level events execute between the test listener onStart and onFinish methods
@@ -187,41 +204,17 @@ public class ParallelByMethodsTestCase3Scenario1 extends BaseParallelizationTest
     //Verifies that the test methods execute in different threads in parallel fashion.
     @Test
     public void verifyThatTestMethodsRunInParallelThreads() {
-        verifySimultaneousTestMethods(testMethodLevelEventLogs, TEST, 5);
+        verifyParallelTestMethodsWithNonParallelDataProvider(
+                getTestMethodLevelEventLogsForTest(SUITE, TEST), TEST, expectedInvocationCounts,
+                5, 5
+        );
     }
 
     //Verifies that all the test method level events for any given test method run in the same thread.
     @Test
     public void verifyThatAllEventsForATestMethodExecuteInSameThread() {
-        verifySameThreadIdForAllEvents(
-                new ArrayList<>(testMethodAEventLogs.get(testMethodAEventLogs.keySet().toArray()[0])), "The event " +
-                        "for testMethodA should all be run in the same thread: " +
-                        testMethodAEventLogs.get(testMethodAEventLogs.keySet().toArray()[0])
-        );
-
-        verifySameThreadIdForAllEvents(
-                new ArrayList<>(testMethodBEventLogs.get(testMethodBEventLogs.keySet().toArray()[0])), "The event " +
-                        "for testMethodB should all be run in the same thread: " +
-                        testMethodBEventLogs.get(testMethodBEventLogs.keySet().toArray()[0])
-        );
-
-        verifySameThreadIdForAllEvents(
-                new ArrayList<>(testMethodCEventLogs.get(testMethodCEventLogs.keySet().toArray()[0])), "The event " +
-                        "for testMethodC should all be run in the same thread: " +
-                        testMethodCEventLogs.get(testMethodCEventLogs.keySet().toArray()[0])
-        );
-
-        verifySameThreadIdForAllEvents(
-                new ArrayList<>(testMethodDEventLogs.get(testMethodDEventLogs.keySet().toArray()[0])), "The event " +
-                        "for testMethodD should all be run in the same thread: " +
-                        testMethodDEventLogs.get(testMethodDEventLogs.keySet().toArray()[0])
-        );
-
-        verifySameThreadIdForAllEvents(
-                new ArrayList<>(testMethodEEventLogs.get(testMethodEEventLogs.keySet().toArray()[0])), "The event " +
-                        "for testMethodE should all be run in the same thread: " +
-                        testMethodEEventLogs.get(testMethodEEventLogs.keySet().toArray()[0])
+        verifyEventsForTestMethodsRunInTheSameThread(
+                TestClassAFiveMethodsWithDataProviderOnAllMethodsAndNoDepsSample.class, SUITE, TEST
         );
     }
-
 }

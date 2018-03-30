@@ -3,14 +3,10 @@ package org.testng;
 import org.testng.xml.XmlClass;
 import org.testng.xml.XmlTest;
 
-import java.io.Serializable;
-
 /**
  * <code>IClass</code> represents a test class and a collection of its instances.
- *
- * @author <a href = "mailto:cedric&#64;beust.com">Cedric Beust</a>
  */
-public interface IClass extends Serializable {
+public interface IClass {
 
   /**
    * @return this test class name.  This is the name of the
@@ -48,16 +44,6 @@ public interface IClass extends Serializable {
    * @return All the instances the methods will be invoked upon.
    */
   Object[] getInstances(boolean create);
-
-  /**
-   * @deprecated Not used
-   *
-   * @return The number of instances used in this class.  This method
-   * is needed for serialization since we don't know ahead of time if the
-   * instances of the test classes will be serializable.
-   */
-  @Deprecated
-  int getInstanceCount();
 
   long[] getInstanceHashCodes();
 

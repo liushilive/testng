@@ -1,6 +1,5 @@
 package org.testng.internal;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -68,7 +67,7 @@ public class MethodInstanceTest {
     methods.add(buildMethodInstance("unittests", "StatisticsTest", 0, "cStatistics"));
 
     try {
-      Collections.sort(methods, MethodInstance.SORT_BY_INDEX);
+      methods.sort(MethodInstance.SORT_BY_INDEX);
     }
     catch (IllegalArgumentException ex) {
       Assert.fail("Comparison method violates its general contract!");
@@ -86,7 +85,7 @@ public class MethodInstanceTest {
   }
 
   public static class XmlClassStub extends XmlClass {
-    private static final long serialVersionUID = 1L;
+
     private int index;
     private String name;
 
@@ -112,7 +111,7 @@ public class MethodInstanceTest {
   }
 
   public static class XmlTestStub extends XmlTest {
-    private static final long serialVersionUID = 1L;
+
     private String name;
 
     public XmlTestStub(String name) {
@@ -126,7 +125,6 @@ public class MethodInstanceTest {
   }
 
   public static class TestClassStub implements ITestClass {
-    private static final long serialVersionUID = 1L;
 
     private XmlTest xmlTest;
     private XmlClass xmlClass;
@@ -156,10 +154,9 @@ public class MethodInstanceTest {
       return null;
     }
 
-    @SuppressWarnings("rawtypes")
     @Override
-    public Class getRealClass() {
-      return null;
+    public Class<?> getRealClass() {
+      return xmlClass.getSupportClass();
     }
 
     @Override
@@ -174,12 +171,6 @@ public class MethodInstanceTest {
     @Override
     public long[] getInstanceHashCodes() {
       return null;
-    }
-
-    @Deprecated
-    @Override
-    public int getInstanceCount() {
-      return 0;
     }
 
     @Override
@@ -240,7 +231,7 @@ public class MethodInstanceTest {
   }
 
   public static class TestNGMethodStub implements ITestNGMethod {
-    private static final long serialVersionUID = 1L;
+
     private TestClassStub testClassStub;
     private String methodName;
 
@@ -256,13 +247,7 @@ public class MethodInstanceTest {
     }
 
     @Override
-    public int compareTo(Object o) {
-      return 0;
-    }
-
-    @SuppressWarnings("rawtypes")
-    @Override
-    public Class getRealClass() {
+    public Class<?> getRealClass() {
       return null;
     }
 
@@ -276,18 +261,8 @@ public class MethodInstanceTest {
     }
 
     @Override
-    public Method getMethod() {
-      return null;
-    }
-
-    @Override
     public String getMethodName() {
       return methodName;
-    }
-
-    @Override
-    public Object[] getInstances() {
-      return null;
     }
 
     @Override
@@ -404,11 +379,6 @@ public class MethodInstanceTest {
 
     @Override
     public int getInvocationCount() {
-      return 0;
-    }
-
-    @Override
-    public int getTotalInvocationCount() {
       return 0;
     }
 

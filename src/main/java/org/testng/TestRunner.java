@@ -1,6 +1,5 @@
 package org.testng;
 
-import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -10,23 +9,24 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-import org.testng.annotations.Guice;
-import org.testng.annotations.IListenersAnnotation;
 import org.testng.collections.ListMultiMap;
 import org.testng.collections.Lists;
 import org.testng.collections.Maps;
 import org.testng.collections.Sets;
+import org.testng.internal.AbstractParallelWorker;
 import org.testng.internal.Attributes;
 import org.testng.internal.ClassHelper;
-import org.testng.internal.ClassImpl;
 import org.testng.internal.ClassInfoMap;
 import org.testng.internal.ConfigurationGroupMethods;
-import org.testng.internal.Constants;
+import org.testng.internal.DefaultListenerFactory;
 import org.testng.internal.DynamicGraph;
 import org.testng.internal.DynamicGraph.Status;
+import org.testng.internal.DynamicGraphHelper;
+import org.testng.internal.GroupsHelper;
 import org.testng.internal.IConfiguration;
 import org.testng.internal.IInvoker;
 import org.testng.internal.ITestResultNotifier;
@@ -34,58 +34,60 @@ import org.testng.internal.InvokedMethod;
 import org.testng.internal.Invoker;
 import org.testng.internal.MethodGroupsHelper;
 import org.testng.internal.MethodHelper;
-import org.testng.internal.MethodInstance;
 import org.testng.internal.ResultMap;
 import org.testng.internal.RunInfo;
+import org.testng.internal.Systematiser;
+import org.testng.internal.TestListenerHelper;
 import org.testng.internal.TestMethodWorker;
 import org.testng.internal.TestNGClassFinder;
 import org.testng.internal.TestNGMethodFinder;
 import org.testng.internal.Utils;
 import org.testng.internal.XmlMethodSelector;
-import org.testng.internal.annotations.AnnotationHelper;
 import org.testng.internal.annotations.IAnnotationFinder;
 import org.testng.internal.thread.graph.GraphThreadPoolExecutor;
 import org.testng.internal.thread.graph.IThreadWorkerFactory;
 import org.testng.internal.thread.graph.IWorker;
 import org.testng.junit.IJUnitTestRunner;
+import org.testng.util.Strings;
 import org.testng.xml.XmlClass;
 import org.testng.xml.XmlInclude;
 import org.testng.xml.XmlPackage;
-import org.testng.xml.XmlSuite;
 import org.testng.xml.XmlTest;
 
 import com.google.inject.Injector;
 import com.google.inject.Module;
 
+import static org.testng.internal.MethodHelper.fixMethodsWithClass;
+
 /**
  * This class takes care of running one Test.
- *
- * @author Cedric Beust, Apr 26, 2004
  */
 public class TestRunner
-    implements ITestContext, ITestResultNotifier, IThreadWorkerFactory<ITestNGMethod>
-{
-  /* generated */
-  private static final long serialVersionUID = 4247820024988306670L;
+    implements ITestContext, ITestResultNotifier, IThreadWorkerFactory<ITestNGMethod> {
+
+  private static final String DEFAULT_PROP_OUTPUT_DIR = "test-output";
+
+  private final Comparator<ITestNGMethod> comparator;
   private ISuite m_suite;
   private XmlTest m_xmlTest;
   private String m_testName;
 
-  transient private List<XmlClass> m_testClassesFromXml= null;
-  transient private List<XmlPackage> m_packageNamesFromXml= null;
+  private final GuiceHelper guiceHelper = new GuiceHelper(this);
 
-  transient private IInvoker m_invoker= null;
-  transient private IAnnotationFinder m_annotationFinder= null;
+  private List<XmlClass> m_testClassesFromXml= null;
+
+  private IInvoker m_invoker= null;
+  private IAnnotationFinder m_annotationFinder= null;
 
   /** ITestListeners support. */
-  transient private List<ITestListener> m_testListeners = Lists.newArrayList();
-  transient private Set<IConfigurationListener> m_configurationListeners = Sets.newHashSet();
+  private List<ITestListener> m_testListeners = Lists.newArrayList();
+  private Set<IConfigurationListener> m_configurationListeners = Sets.newHashSet();
 
-  transient private IConfigurationListener m_confListener= new ConfigurationListener();
-  transient private boolean m_skipFailedInvocationCounts;
+  private IConfigurationListener m_confListener= new ConfigurationListener();
 
-  transient private Collection<IInvokedMethodListener> m_invokedMethodListeners = Lists.newArrayList();
-  transient private final Map<Class<? extends IClassListener>, IClassListener> m_classListeners = Maps.newHashMap();
+  private Collection<IInvokedMethodListener> m_invokedMethodListeners = Lists.newArrayList();
+  private final Map<Class<? extends IClassListener>, IClassListener> m_classListeners = Maps.newHashMap();
+  private final Map<Class<? extends IDataProviderListener>, IDataProviderListener>  m_dataProviderListeners;
 
   /**
    * All the test methods we found, associated with their respective classes.
@@ -100,10 +102,10 @@ public class TestRunner
   private Date m_endDate = null;
 
   /** A map to keep track of Class <-> IClass. */
-  transient private Map<Class<?>, ITestClass> m_classMap = Maps.newLinkedHashMap();
+  private Map<Class<?>, ITestClass> m_classMap = Maps.newLinkedHashMap();
 
   /** Where the reports will be created. */
-  private String m_outputDirectory= Constants.getDefaultValueFor(Constants.PROP_OUTPUT_DIR);
+  private String m_outputDirectory= DEFAULT_PROP_OUTPUT_DIR;
 
   // The XML method selector (groups/methods included/excluded in XML)
   private XmlMethodSelector m_xmlMethodSelector = new XmlMethodSelector();
@@ -140,34 +142,53 @@ public class TestRunner
   private String m_host;
 
   // Defined dynamically depending on <test preserve-order="true/false">
-  transient private List<IMethodInterceptor> m_methodInterceptors;
+  private List<IMethodInterceptor> m_methodInterceptors;
 
-  private transient ClassMethodMap m_classMethodMap;
-  private transient TestNGClassFinder m_testClassFinder;
-  private transient IConfiguration m_configuration;
+  private ClassMethodMap m_classMethodMap;
+  private TestNGClassFinder m_testClassFinder;
+  private IConfiguration m_configuration;
   private IMethodInterceptor builtinInterceptor;
 
-  private enum PriorityWeight {
+  public enum PriorityWeight {
     groupByInstance, preserveOrder, priority, dependsOnGroups, dependsOnMethods
   }
 
   protected TestRunner(IConfiguration configuration,
-                    ISuite suite,
-                    XmlTest test,
-                    String outputDirectory,
-                    IAnnotationFinder finder,
-                    boolean skipFailedInvocationCounts,
-                    Collection<IInvokedMethodListener> invokedMethodListeners,
-                    List<IClassListener> classListeners)
-  {
+                       ISuite suite,
+                       XmlTest test,
+                       String outputDirectory,
+                       IAnnotationFinder finder,
+                       boolean skipFailedInvocationCounts,
+                       Collection<IInvokedMethodListener> invokedMethodListeners,
+                       List<IClassListener> classListeners, Comparator<ITestNGMethod> comparator,
+                       Map<Class<? extends IDataProviderListener>, IDataProviderListener>  dataProviderListeners) {
+    this.comparator = comparator;
+    this.m_dataProviderListeners = Maps.newHashMap(dataProviderListeners);
     init(configuration, suite, test, outputDirectory, finder, skipFailedInvocationCounts,
-        invokedMethodListeners, classListeners);
+            invokedMethodListeners, classListeners);
   }
+
 
   public TestRunner(IConfiguration configuration, ISuite suite, XmlTest test,
       boolean skipFailedInvocationCounts,
       Collection<IInvokedMethodListener> invokedMethodListeners,
+      List<IClassListener> classListeners, Comparator<ITestNGMethod> comparator) {
+    this.comparator = comparator;
+    this.m_dataProviderListeners = Collections.emptyMap();
+    init(configuration, suite, test, suite.getOutputDirectory(),
+        suite.getAnnotationFinder(),
+        skipFailedInvocationCounts, invokedMethodListeners, classListeners);
+  }
+  
+  /**
+   * This constructor is used by testng-remote, any changes related to it please contact with testng-team.
+   */
+  public TestRunner(IConfiguration configuration, ISuite suite, XmlTest test,
+      boolean skipFailedInvocationCounts,
+      Collection<IInvokedMethodListener> invokedMethodListeners,
       List<IClassListener> classListeners) {
+    this.comparator = Systematiser.getComparator();
+    this.m_dataProviderListeners = Collections.emptyMap();
     init(configuration, suite, test, suite.getOutputDirectory(),
         suite.getAnnotationFinder(),
         skipFailedInvocationCounts, invokedMethodListeners, classListeners);
@@ -188,15 +209,16 @@ public class TestRunner
     m_testName = test.getName();
     m_host = suite.getHost();
     m_testClassesFromXml= test.getXmlClasses();
-    m_skipFailedInvocationCounts = skipFailedInvocationCounts;
     setVerbose(test.getVerbose());
 
-
     boolean preserveOrder = test.getPreserveOrder();
-    m_methodInterceptors = new ArrayList<>();
     builtinInterceptor = preserveOrder ? new PreserveOrderMethodInterceptor() : new InstanceOrderingMethodInterceptor();
+    m_methodInterceptors = new ArrayList<>();
+    //Add the built in interceptor as the first interceptor. That way we let our users determine the final order
+    //by plugging in their own custom interceptors as well.
+    m_methodInterceptors.add(builtinInterceptor);
 
-    m_packageNamesFromXml= test.getXmlPackages();
+    List<XmlPackage> m_packageNamesFromXml = test.getXmlPackages();
     if(null != m_packageNamesFromXml) {
       for(XmlPackage xp: m_packageNamesFromXml) {
         m_testClassesFromXml.addAll(xp.getXmlClasses());
@@ -210,7 +232,7 @@ public class TestRunner
       m_classListeners.put(classListener.getClass(), classListener);
     }
     m_invoker = new Invoker(m_configuration, this, this, m_suite.getSuiteState(),
-        m_skipFailedInvocationCounts, invokedMethodListeners, classListeners);
+            skipFailedInvocationCounts, invokedMethodListeners, classListeners, m_dataProviderListeners.values());
 
     if (test.getParallel() != null) {
       log(3, "Running the tests in '" + test.getName() + "' with parallel mode:" + test.getParallel());
@@ -259,43 +281,6 @@ public class TestRunner
     }
   }
 
-  private static class ListenerHolder {
-    private List<Class<? extends ITestNGListener>> listenerClasses;
-    private Class<? extends ITestNGListenerFactory> listenerFactoryClass;
-  }
-
-  /**
-   * @return all the @Listeners annotations found in the current class and its
-   * superclasses.
-   */
-  private ListenerHolder findAllListeners(Class<?> cls) {
-    ListenerHolder result = new ListenerHolder();
-    result.listenerClasses = Lists.newArrayList();
-
-    do {
-      IListenersAnnotation l = m_annotationFinder.findAnnotation(cls, IListenersAnnotation.class);
-      if (l != null) {
-        Class<? extends ITestNGListener>[] classes = l.getValue();
-        for (Class<? extends ITestNGListener> c : classes) {
-          result.listenerClasses.add(c);
-
-          if (ITestNGListenerFactory.class.isAssignableFrom(c)) {
-            if (result.listenerFactoryClass == null) {
-              result.listenerFactoryClass = (Class<? extends ITestNGListenerFactory>) c;
-            }
-            else {
-              throw new TestNGException("Found more than one class implementing" +
-                  "ITestNGListenerFactory:" + c + " and " + result.listenerFactoryClass);
-            }
-          }
-        }
-      }
-      cls = cls.getSuperclass();
-    } while (cls != Object.class);
-
-    return result;
-  }
-
   private void initListeners() {
     //
     // Find all the listener factories and collect all the listeners requested in a
@@ -306,11 +291,15 @@ public class TestRunner
 
     for (IClass cls : getTestClasses()) {
       Class<?> realClass = cls.getRealClass();
-      ListenerHolder listenerHolder = findAllListeners(realClass);
+      TestListenerHelper.ListenerHolder listenerHolder = TestListenerHelper.findAllListeners(realClass, m_annotationFinder);
       if (listenerFactoryClass == null) {
-        listenerFactoryClass = listenerHolder.listenerFactoryClass;
+        listenerFactoryClass = listenerHolder.getListenerFactoryClass();
       }
-      listenerClasses.addAll(listenerHolder.listenerClasses);
+      listenerClasses.addAll(listenerHolder.getListenerClasses());
+    }
+
+    if (listenerFactoryClass == null) {
+      listenerFactoryClass = DefaultListenerFactory.class;
     }
 
     //
@@ -318,34 +307,15 @@ public class TestRunner
     // listener factory collected from a class implementing ITestNGListenerFactory.
     // Instantiate all the requested listeners.
     //
-    ITestNGListenerFactory listenerFactory = null;
 
-    // If we found a test listener factory, instantiate it.
-    try {
-      if (m_testClassFinder != null) {
-        IClass ic = m_testClassFinder.getIClass(listenerFactoryClass);
-        if (ic != null) {
-          listenerFactory = (ITestNGListenerFactory) ic.getInstances(false)[0];
-        }
-      }
-      if (listenerFactory == null) {
-        listenerFactory = listenerFactoryClass != null ? listenerFactoryClass.newInstance() : null;
-      }
-    }
-    catch(Exception ex) {
-      throw new TestNGException("Couldn't instantiate the ITestNGListenerFactory: "
-          + ex);
-    }
+    ITestNGListenerFactory factory = TestListenerHelper.createListenerFactory(m_testClassFinder, listenerFactoryClass);
 
     // Instantiate all the listeners
     for (Class<? extends ITestNGListener> c : listenerClasses) {
       if (IClassListener.class.isAssignableFrom(c) && m_classListeners.containsKey(c)) {
           continue;
       }
-      ITestNGListener listener = listenerFactory != null ? listenerFactory.createListener(c) : null;
-      if (listener == null) {
-        listener = ClassHelper.newInstance(c);
-      }
+      ITestNGListener listener = factory.createListener(c);
 
       addListener(listener);
     }
@@ -400,12 +370,9 @@ public class TestRunner
     List<ITestNGMethod> afterXmlTestMethods = Lists.newArrayList();
 
     ClassInfoMap classMap = new ClassInfoMap(m_testClassesFromXml);
-    m_testClassFinder= new TestNGClassFinder(classMap,
-                                             m_xmlTest,
-                                             m_configuration,
-                                             this);
-    ITestMethodFinder testMethodFinder
-      = new TestNGMethodFinder(m_runInfo, m_annotationFinder);
+    m_testClassFinder= new TestNGClassFinder(classMap,Maps.<Class<?>, List<Object>>newHashMap(),
+                                             m_configuration, this, m_dataProviderListeners);
+    ITestMethodFinder testMethodFinder = new TestNGMethodFinder(m_runInfo, m_annotationFinder, comparator);
 
     m_runInfo.setTestMethods(testMethods);
 
@@ -462,21 +429,21 @@ public class TestRunner
                                                               m_runInfo,
                                                               m_annotationFinder,
                                                               true /* unique */,
-                                                              m_excludedMethods);
+                                                              m_excludedMethods, comparator);
 
     m_beforeXmlTestMethods = MethodHelper.collectAndOrderMethods(beforeXmlTestMethods,
                                                               false /* forTests */,
                                                               m_runInfo,
                                                               m_annotationFinder,
                                                               true /* unique (CQ added by me)*/,
-                                                              m_excludedMethods);
+                                                              m_excludedMethods, comparator);
 
     m_allTestMethods = MethodHelper.collectAndOrderMethods(testMethods,
                                                                 true /* forTest? */,
                                                                 m_runInfo,
                                                                 m_annotationFinder,
                                                                 false /* unique */,
-                                                                m_excludedMethods);
+                                                                m_excludedMethods, comparator);
     m_classMethodMap = new ClassMethodMap(testMethods, m_xmlMethodSelector);
 
     m_afterXmlTestMethods = MethodHelper.collectAndOrderMethods(afterXmlTestMethods,
@@ -484,30 +451,18 @@ public class TestRunner
                                                               m_runInfo,
                                                               m_annotationFinder,
                                                               true /* unique (CQ added by me)*/,
-                                                              m_excludedMethods);
+                                                              m_excludedMethods, comparator);
 
     m_afterSuiteMethods = MethodHelper.collectAndOrderMethods(afterSuiteMethods,
                                                               false /* forTests */,
                                                               m_runInfo,
                                                               m_annotationFinder,
                                                               true /* unique */,
-                                                              m_excludedMethods);
+                                                              m_excludedMethods, comparator);
     // shared group methods
     m_groupMethods = new ConfigurationGroupMethods(m_allTestMethods, beforeGroupMethods, afterGroupMethods);
 
 
-  }
-
-  private void fixMethodsWithClass(ITestNGMethod[] methods,
-                                   ITestClass testCls,
-                                   List<ITestNGMethod> methodList) {
-    for (ITestNGMethod itm : methods) {
-      itm.setTestClass(testCls);
-
-      if (methodList != null) {
-        methodList.add(itm);
-      }
-    }
   }
 
   public Collection<ITestClass> getTestClasses() {
@@ -520,71 +475,14 @@ public class TestRunner
 
   public void setOutputDirectory(String od) {
     m_outputDirectory= od;
-//  FIX: empty directories were created
-//    if (od == null) { m_outputDirectory = null; return; } //for maven2
-//    File file = new File(od);
-//    file.mkdirs();
-//    m_outputDirectory= file.getAbsolutePath();
   }
 
   private void addMetaGroup(String name, List<String> groupNames) {
     m_metaGroups.put(name, groupNames);
   }
 
-  /**
-   * Calculate the transitive closure of all the MetaGroups
-   *
-   * @param groups
-   * @param unfinishedGroups
-   * @param result           The transitive closure containing all the groups found
-   */
-  private void collectGroups(String[] groups,
-                             List<String> unfinishedGroups,
-                             Map<String, String> result) {
-    for (String gn : groups) {
-      List<String> subGroups = m_metaGroups.get(gn);
-      if (null != subGroups) {
-
-        for (String sg : subGroups) {
-          if (null == result.get(sg)) {
-            result.put(sg, sg);
-            unfinishedGroups.add(sg);
-          }
-        }
-      }
-    }
-  }
-
   private Map<String, String> createGroups(List<String> groups) {
-    return createGroups(groups.toArray(new String[groups.size()]));
-  }
-
-  private Map<String, String> createGroups(String[] groups) {
-    Map<String, String> result = Maps.newHashMap();
-
-    // Groups that were passed on the command line
-    for (String group : groups) {
-      result.put(group, group);
-    }
-
-    // See if we have any MetaGroups and
-    // expand them if they match one of the groups
-    // we have just been passed
-    List<String> unfinishedGroups = Lists.newArrayList();
-
-    if (m_metaGroups.size() > 0) {
-      collectGroups(groups, unfinishedGroups, result);
-
-      // Do we need to loop over unfinished groups?
-      while (unfinishedGroups.size() > 0) {
-        String[] uGroups = unfinishedGroups.toArray(new String[unfinishedGroups.size()]);
-        unfinishedGroups = Lists.newArrayList();
-        collectGroups(uGroups, unfinishedGroups, result);
-      }
-    }
-
-    //    Utils.dumpMap(result);
-    return result;
+    return GroupsHelper.createGroups(m_metaGroups, groups);
   }
 
   /**
@@ -604,7 +502,7 @@ public class TestRunner
     try {
       XmlTest test= getTest();
       if(test.isJUnit()) {
-        privateRunJUnit(test);
+        privateRunJUnit();
       }
       else {
         privateRun(test);
@@ -640,7 +538,7 @@ public class TestRunner
     }
   }
 
-  private void privateRunJUnit(XmlTest xmlTest) {
+  private void privateRunJUnit() {
     final ClassInfoMap cim = new ClassInfoMap(m_testClassesFromXml, false);
     final Set<Class<?>> classes = cim.getClasses();
     final List<ITestNGMethod> runMethods = Lists.newArrayList();
@@ -720,11 +618,12 @@ public class TestRunner
       // Make sure we create a graph based on the intercepted methods, otherwise an interceptor
       // removing methods would cause the graph never to terminate (because it would expect
       // termination from methods that never get invoked).
-      DynamicGraph<ITestNGMethod> graph = createDynamicGraph(intercept(m_allTestMethods));
+      DynamicGraph<ITestNGMethod> graph = DynamicGraphHelper.createDynamicGraph(intercept(m_allTestMethods),
+              getCurrentXmlTest());
       if (parallel) {
         if (graph.getNodeCount() > 0) {
           GraphThreadPoolExecutor<ITestNGMethod> executor =
-                  new GraphThreadPoolExecutor<>(graph, this,
+                  new GraphThreadPoolExecutor<>("test=" + xmlTest.getName(), graph, this,
                           threadCount, threadCount, 0, TimeUnit.MILLISECONDS,
                           new LinkedBlockingQueue<Runnable>());
           executor.run();
@@ -740,11 +639,7 @@ public class TestRunner
           }
         }
       } else {
-        boolean debug = false;
         List<ITestNGMethod> freeNodes = graph.getFreeNodes();
-        if (debug) {
-          System.out.println("Free nodes:" + freeNodes);
-        }
 
         if (graph.getNodeCount() > 0 && freeNodes.isEmpty()) {
           throw new TestNGException("No free nodes found in:" + graph);
@@ -757,9 +652,6 @@ public class TestRunner
           }
           graph.setStatus(freeNodes, Status.FINISHED);
           freeNodes = graph.getFreeNodes();
-          if (debug) {
-            System.out.println("Free nodes:" + freeNodes);
-          }
         }
       }
     }
@@ -769,25 +661,29 @@ public class TestRunner
    * Apply the method interceptor (if applicable) to the list of methods.
    */
   private ITestNGMethod[] intercept(ITestNGMethod[] methods) {
-    List<IMethodInstance> methodInstances = methodsToMethodInstances(Arrays.asList(methods));
 
-    // add built-in interceptor (PreserveOrderMethodInterceptor or InstanceOrderingMethodInterceptor at the end of the list
-    m_methodInterceptors.add(builtinInterceptor);
+    List<IMethodInstance> methodInstances = MethodHelper.methodsToMethodInstances(Arrays.asList(methods));
+
     for (IMethodInterceptor m_methodInterceptor : m_methodInterceptors) {
       methodInstances = m_methodInterceptor.intercept(methodInstances, this);
     }
 
-    List<ITestNGMethod> result = Lists.newArrayList();
-    for (IMethodInstance imi : methodInstances) {
-      result.add(imi.getMethod());
-    }
+    List<ITestNGMethod> result = MethodHelper.methodInstancesToMethods(methodInstances);
 
     //Since an interceptor is involved, we would need to ensure that the ClassMethodMap object is in sync with the
     //output of the interceptor, else @AfterClass doesn't get executed at all when interceptors are involved.
     //so let's update the current classMethodMap object with the list of methods obtained from the interceptor.
     this.m_classMethodMap = new ClassMethodMap(result, null);
 
-    return result.toArray(new ITestNGMethod[result.size()]);
+    ITestNGMethod[] resultArray = result.toArray(new ITestNGMethod[result.size()]);
+
+    //Check if an interceptor had altered the effective test method count. If yes, then we need to
+    //update our configurationGroupMethod object with that information.
+    if (resultArray.length != m_groupMethods.getAllTestMethods().length) {
+      m_groupMethods = new ConfigurationGroupMethods(resultArray, m_groupMethods.getBeforeGroupsMethods(),
+          m_groupMethods.getAfterGroupsMethods());
+    }
+    return resultArray;
   }
 
   /**
@@ -800,168 +696,15 @@ public class TestRunner
    */
   @Override
   public List<IWorker<ITestNGMethod>> createWorkers(List<ITestNGMethod> methods) {
-    List<IWorker<ITestNGMethod>> result;
-    if (XmlSuite.ParallelMode.INSTANCES.equals(m_xmlTest.getParallel())) {
-      result = createInstanceBasedParallelWorkers(methods);
-    } else {
-      result = createClassBasedParallelWorkers(methods);
-    }
-    return result;
-  }
-
-  /**
-   * Create workers for parallel="classes" and similar cases.
-   */
-  private List<IWorker<ITestNGMethod>> createClassBasedParallelWorkers(List<ITestNGMethod> methods) {
-    List<IWorker<ITestNGMethod>> result = Lists.newArrayList();
-    // Methods that belong to classes with a sequential=true or parallel=classes
-    // attribute must all be run in the same worker
-    Set<Class> sequentialClasses = Sets.newHashSet();
-    for (ITestNGMethod m : methods) {
-      Class<? extends ITestClass> cls = m.getRealClass();
-      org.testng.annotations.ITestAnnotation test =
-          m_annotationFinder.findAnnotation(cls, org.testng.annotations.ITestAnnotation.class);
-
-      // If either sequential=true or parallel=classes, mark this class sequential
-      if (test != null && (test.getSequential() || test.getSingleThreaded()) ||
-          XmlSuite.ParallelMode.CLASSES.equals(m_xmlTest.getParallel())) {
-        sequentialClasses.add(cls);
-      }
-    }
-
-    List<IMethodInstance> methodInstances = Lists.newArrayList();
-    for (ITestNGMethod tm : methods) {
-      methodInstances.addAll(methodsToMultipleMethodInstances(tm));
-    }
-
-
-    Map<String, String> params = m_xmlTest.getAllParameters();
-
-    Set<Class<?>> processedClasses = Sets.newHashSet();
-    for (IMethodInstance im : methodInstances) {
-      Class<?> c = im.getMethod().getTestClass().getRealClass();
-      if (sequentialClasses.contains(c)) {
-        if (!processedClasses.contains(c)) {
-          processedClasses.add(c);
-          if (System.getProperty("experimental") != null) {
-            List<List<IMethodInstance>> instances = createInstances(methodInstances);
-            for (List<IMethodInstance> inst : instances) {
-              TestMethodWorker worker = createTestMethodWorker(inst, params, c);
-              result.add(worker);
-            }
-          }
-          else {
-            // Sequential class: all methods in one worker
-            TestMethodWorker worker = createTestMethodWorker(methodInstances, params, c);
-            result.add(worker);
-          }
-        }
-      }
-      else {
-        // Parallel class: each method in its own worker
-        TestMethodWorker worker = createTestMethodWorker(Arrays.asList(im), params, c);
-        result.add(worker);
-      }
-    }
-
-    // Sort by priorities
-    Collections.sort(result);
-    return result;
-  }
-
-
-  /**
-   * Create workers for parallel="instances".
-   */
-  private List<IWorker<ITestNGMethod>>
-      createInstanceBasedParallelWorkers(List<ITestNGMethod> methods) {
-    List<IWorker<ITestNGMethod>> result = Lists.newArrayList();
-    ListMultiMap<Object, ITestNGMethod> lmm = Maps.newListMultiMap();
-    for (ITestNGMethod m : methods) {
-      lmm.put(m.getInstance(), m);
-    }
-    for (Map.Entry<Object, List<ITestNGMethod>> es : lmm.entrySet()) {
-      List<IMethodInstance> methodInstances = Lists.newArrayList();
-      for (ITestNGMethod m : es.getValue()) {
-        methodInstances.add(new MethodInstance(m));
-      }
-      TestMethodWorker tmw = new TestMethodWorker(m_invoker,
-          methodInstances.toArray(new IMethodInstance[methodInstances.size()]),
-          m_xmlTest.getSuite(),
-          m_xmlTest.getAllParameters(),
-          m_groupMethods,
-          m_classMethodMap,
-          this,
-          new ArrayList<>(m_classListeners.values()));
-      result.add(tmw);
-    }
-
-    return result;
-  }
-
-  private List<List<IMethodInstance>> createInstances(List<IMethodInstance> methodInstances) {
-    Map<Object, List<IMethodInstance>> map = Maps.newHashMap();
-//    MapList<IMethodInstance[], Object> map = new MapList<IMethodInstance[], Object>();
-    for (IMethodInstance imi : methodInstances) {
-      for (Object o : imi.getInstances()) {
-        System.out.println(o);
-        List<IMethodInstance> l = map.get(o);
-        if (l == null) {
-          l = Lists.newArrayList();
-          map.put(o, l);
-        }
-        l.add(imi);
-      }
-//      for (Object instance : imi.getInstances()) {
-//        map.put(imi, instance);
-//      }
-    }
-//    return map.getKeys();
-//    System.out.println(map);
-    return new ArrayList<>(map.values());
-  }
-
-  private TestMethodWorker createTestMethodWorker(
-      List<IMethodInstance> methodInstances, Map<String, String> params,
-      Class<?> c) {
-    return new TestMethodWorker(m_invoker,
-        findClasses(methodInstances, c),
-        m_xmlTest.getSuite(),
-        params,
-        m_groupMethods,
-        m_classMethodMap,
-        this,
-        new ArrayList<>(m_classListeners.values()));
-  }
-
-  private IMethodInstance[] findClasses(List<IMethodInstance> methodInstances, Class<?> c) {
-    List<IMethodInstance> result = Lists.newArrayList();
-    for (IMethodInstance mi : methodInstances) {
-      if (mi.getMethod().getTestClass().getRealClass() == c) {
-        result.add(mi);
-      }
-    }
-    return result.toArray(new IMethodInstance[result.size()]);
-  }
-
-  /**
-   * @@@ remove this
-   */
-  private List<MethodInstance> methodsToMultipleMethodInstances(ITestNGMethod... sl) {
-    List<MethodInstance> vResult = Lists.newArrayList();
-    for (ITestNGMethod m : sl) {
-      vResult.add(new MethodInstance(m));
-    }
-
-    return vResult;
-  }
-
-  private List<IMethodInstance> methodsToMethodInstances(List<ITestNGMethod> sl) {
-    List<IMethodInstance> result = new ArrayList<>();
-      for (ITestNGMethod iTestNGMethod : sl) {
-        result.add(new MethodInstance(iTestNGMethod));
-      }
-    return result;
+    AbstractParallelWorker.Arguments args = new AbstractParallelWorker.Arguments.Builder()
+            .classMethodMap(this.m_classMethodMap)
+            .configMethods(this.m_groupMethods)
+            .finder(this.m_annotationFinder)
+            .invoker(this.m_invoker)
+            .methods(methods)
+            .testContext(this)
+            .listeners(this.m_classListeners.values()).build();
+    return AbstractParallelWorker.newWorker(m_xmlTest.getParallel()).createWorkers(args);
   }
 
   //
@@ -993,192 +736,10 @@ public class TestRunner
     //
     m_endDate = new Date(System.currentTimeMillis());
 
-    if (getVerbose() >= 3) {
-      dumpInvokedMethods();
-    }
+    dumpInvokedMethods();
 
     // Invoke listeners
     fireEvent(false /*stop*/);
-
-    // Statistics
-//    logResults();
-  }
-
-  private DynamicGraph<ITestNGMethod> createDynamicGraph(ITestNGMethod[] methods) {
-    DynamicGraph<ITestNGMethod> result = new DynamicGraph<>();
-
-    ListMultiMap<Integer, ITestNGMethod> methodsByPriority = Maps.newListMultiMap();
-    for (ITestNGMethod method : methods) {
-      methodsByPriority.put(method.getPriority(), method);
-    }
-    List<Integer> availablePriorities = Lists.newArrayList(methodsByPriority.keySet());
-    Collections.sort(availablePriorities);
-    Integer previousPriority = methods.length > 0 ? availablePriorities.get(0) : 0;
-    for (int i = 1; i < availablePriorities.size(); i++) {
-      Integer currentPriority = availablePriorities.get(i);
-      for (ITestNGMethod p0Method : methodsByPriority.get(previousPriority)) {
-        for (ITestNGMethod p1Method : methodsByPriority.get(currentPriority)) {
-          result.addEdge(PriorityWeight.priority.ordinal(), p1Method, p0Method);
-        }
-      }
-      previousPriority = currentPriority;
-    }
-
-    DependencyMap dependencyMap = new DependencyMap(methods);
-
-    // Keep track of whether we have group dependencies. If we do, preserve-order needs
-    // to be ignored since group dependencies create inter-class dependencies which can
-    // end up creating cycles when combined with preserve-order.
-    boolean hasDependencies = false;
-    for (ITestNGMethod m : methods) {
-      result.addNode(m);
-
-      // Dependent methods
-      {
-        String[] dependentMethods = m.getMethodsDependedUpon();
-        if (dependentMethods != null) {
-          for (String d : dependentMethods) {
-            ITestNGMethod dm = dependencyMap.getMethodDependingOn(d, m);
-            if (m != dm){
-            	result.addEdge(PriorityWeight.dependsOnMethods.ordinal(), m, dm);
-            }
-          }
-        }
-      }
-
-      // Dependent groups
-      {
-        String[] dependentGroups = m.getGroupsDependedUpon();
-        for (String d : dependentGroups) {
-          hasDependencies = true;
-          List<ITestNGMethod> dg = dependencyMap.getMethodsThatBelongTo(d, m);
-          if (dg == null) {
-            throw new TestNGException("Method \"" + m
-                + "\" depends on nonexistent group \"" + d + "\"");
-          }
-          for (ITestNGMethod ddm : dg) {
-            result.addEdge(PriorityWeight.dependsOnGroups.ordinal(), m, ddm);
-          }
-        }
-      }
-    }
-
-    // Preserve order
-    // Don't preserve the ordering if we're running in parallel, otherwise the suite will
-    // create multiple threads but these threads will be created one after the other,
-    // giving the impression of parallelism (multiple thread id's) while still running
-    // sequentially.
-    if (! hasDependencies
-        && getCurrentXmlTest().getParallel() == XmlSuite.ParallelMode.NONE
-        && getCurrentXmlTest().getPreserveOrder()) {
-      // If preserve-order was specified and the class order is A, B
-      // create a new set of dependencies where each method of B depends
-      // on all the methods of A
-      ListMultiMap<ITestNGMethod, ITestNGMethod> classDependencies
-          = createClassDependencies(methods, getCurrentXmlTest());
-
-      for (Map.Entry<ITestNGMethod, List<ITestNGMethod>> es : classDependencies.entrySet()) {
-        for (ITestNGMethod dm : es.getValue()) {
-          result.addEdge(PriorityWeight.preserveOrder.ordinal(), dm, es.getKey());
-        }
-      }
-    }
-
-    // Group by instances
-    if (getCurrentXmlTest().getGroupByInstances()) {
-      ListMultiMap<ITestNGMethod, ITestNGMethod> instanceDependencies = createInstanceDependencies(methods);
-      for (Map.Entry<ITestNGMethod, List<ITestNGMethod>> es : instanceDependencies.entrySet()) {
-        result.addEdge(PriorityWeight.groupByInstance.ordinal(), es.getKey(), es.getValue());
-      }
-    }
-
-    return result;
-  }
-
-  private ListMultiMap<ITestNGMethod, ITestNGMethod> createInstanceDependencies(ITestNGMethod[] methods) {
-    ListMultiMap<Object, ITestNGMethod> instanceMap = Maps.newSortedListMultiMap();
-    for (ITestNGMethod m : methods) {
-      instanceMap.put(m.getInstance(), m);
-    }
-
-    ListMultiMap<ITestNGMethod, ITestNGMethod> result = Maps.newListMultiMap();
-    Object previousInstance = null;
-    for (Map.Entry<Object, List<ITestNGMethod>> es : instanceMap.entrySet()) {
-      if (previousInstance == null) {
-        previousInstance = es.getKey();
-      } else {
-        List<ITestNGMethod> previousMethods = instanceMap.get(previousInstance);
-        Object currentInstance = es.getKey();
-        List<ITestNGMethod> currentMethods = instanceMap.get(currentInstance);
-        // Make all the methods from the current instance depend on the methods of
-        // the previous instance
-        for (ITestNGMethod cm : currentMethods) {
-          for (ITestNGMethod pm : previousMethods) {
-            result.put(cm, pm);
-          }
-        }
-        previousInstance = currentInstance;
-      }
-    }
-
-    return result;
-  }
-
-  private ListMultiMap<ITestNGMethod, ITestNGMethod> createClassDependencies(
-      ITestNGMethod[] methods, XmlTest test)
-  {
-    Map<String, List<ITestNGMethod>> classes = Maps.newHashMap();
-    // Note: use a List here to preserve the ordering but make sure
-    // we don't add the same class twice
-    List<XmlClass> sortedClasses = Lists.newArrayList();
-
-    for (XmlClass c : test.getXmlClasses()) {
-      classes.put(c.getName(), new ArrayList<ITestNGMethod>());
-      if (! sortedClasses.contains(c)) sortedClasses.add(c);
-    }
-
-    // Sort the classes based on their order of appearance in the XML
-    Collections.sort(sortedClasses, new Comparator<XmlClass>() {
-      @Override
-      public int compare(XmlClass arg0, XmlClass arg1) {
-        return arg0.getIndex() - arg1.getIndex();
-      }
-    });
-
-    Map<String, Integer> indexedClasses1 = Maps.newHashMap();
-    Map<Integer, String> indexedClasses2 = Maps.newHashMap();
-    int i = 0;
-    for (XmlClass c : sortedClasses) {
-      indexedClasses1.put(c.getName(), i);
-      indexedClasses2.put(i, c.getName());
-      i++;
-    }
-
-    ListMultiMap<String, ITestNGMethod> methodsFromClass = Maps.newListMultiMap();
-    for (ITestNGMethod m : methods) {
-      methodsFromClass.put(m.getTestClass().getName(), m);
-    }
-
-    ListMultiMap<ITestNGMethod, ITestNGMethod> result = Maps.newListMultiMap();
-    for (ITestNGMethod m : methods) {
-      String name = m.getTestClass().getName();
-      Integer index = indexedClasses1.get(name);
-      // The index could be null if the classes listed in the XML are different
-      // from the methods being run (e.g. the .xml only contains a factory that
-      // instantiates methods from a different class). In this case, we cannot
-      // perform any ordering.
-      if (index != null && index > 0) {
-        // Make this method depend on all the methods of the class in the previous
-        // index
-        String classDependedUpon = indexedClasses2.get(index - 1);
-        List<ITestNGMethod> methodsDependedUpon = methodsFromClass.get(classDependedUpon);
-        for (ITestNGMethod mdu : methodsDependedUpon) {
-          result.put(mdu, m);
-        }
-      }
-    }
-
-    return result;
   }
 
   /**
@@ -1187,8 +748,8 @@ public class TestRunner
   private void logStart() {
     log(3,
         "Running test " + m_testName + " on " + m_classMap.size() + " " + " classes, "
-        + " included groups:[" + mapToString(m_xmlMethodSelector.getIncludedGroups())
-        + "] excluded groups:[" + mapToString(m_xmlMethodSelector.getExcludedGroups()) + "]");
+        + " included groups:[" + Strings.valueOf(m_xmlMethodSelector.getIncludedGroups())
+        + "] excluded groups:[" + Strings.valueOf(m_xmlMethodSelector.getExcludedGroups()) + "]");
 
     if (getVerbose() >= 3) {
       for (ITestClass tc : m_classMap.values()) {
@@ -1205,15 +766,11 @@ public class TestRunner
    */
   private void fireEvent(boolean isStart) {
     for (ITestListener itl : m_testListeners) {
-      try {
-        if (isStart) {
-          itl.onStart(this);
-        }
-        else {
-          itl.onFinish(this);
-        }
-      } catch (Exception e) {
-        e.printStackTrace();
+      if (isStart) {
+        itl.onStart(this);
+      }
+      else {
+        itl.onFinish(this);
       }
     }
   }
@@ -1265,17 +822,13 @@ public class TestRunner
   @Override
   public String[] getIncludedGroups() {
     Map<String, String> ig= m_xmlMethodSelector.getIncludedGroups();
-    String[] result= ig.values().toArray((new String[ig.size()]));
-
-    return result;
+    return ig.values().toArray(new String[ig.size()]);
   }
 
   @Override
   public String[] getExcludedGroups() {
     Map<String, String> eg= m_xmlMethodSelector.getExcludedGroups();
-    String[] result= eg.values().toArray((new String[eg.size()]));
-
-    return result;
+    return eg.values().toArray(new String[eg.size()]);
   }
 
   @Override
@@ -1295,7 +848,6 @@ public class TestRunner
   public ITestNGMethod[] getAllTestMethods() {
     return m_allTestMethods;
   }
-
 
   @Override
   public String getHost() {
@@ -1372,9 +924,7 @@ public class TestRunner
 
   @Override
   public void addInvokedMethod(InvokedMethod im) {
-    synchronized(m_invokedMethods) {
-      m_invokedMethods.add(im);
-    }
+    m_invokedMethods.add(im);
   }
 
   @Override
@@ -1400,7 +950,7 @@ public class TestRunner
 
   @Override
   public List<IConfigurationListener> getConfigurationListeners() {
-    return Lists.<IConfigurationListener>newArrayList(m_configurationListeners);
+    return Lists.newArrayList(m_configurationListeners);
   }
   //
   // ITestResultNotifier
@@ -1409,11 +959,7 @@ public class TestRunner
   private void logFailedTest(ITestNGMethod method,
                              ITestResult tr,
                              boolean withinSuccessPercentage) {
-    /*
-     * We should not remove a passed method from m_passedTests so that we can
-     * account for the passed instances of this test method.
-     */
-    //m_passedTests.removeResult(method);
+
     if (withinSuccessPercentage) {
       m_failedButWithinSuccessPercentageTests.addResult(tr, method);
     }
@@ -1422,16 +968,7 @@ public class TestRunner
     }
   }
 
-  private String mapToString(Map<?, ?> m) {
-    StringBuffer result= new StringBuffer();
-    for (Object o : m.values()) {
-      result.append(o.toString()).append(" ");
-    }
-
-    return result.toString();
-  }
-
-  private void log(int level, String s) {
+  private static void log(int level, String s) {
     Utils.log("TestRunner", level, s);
   }
 
@@ -1443,22 +980,10 @@ public class TestRunner
     m_verbose = n;
   }
 
-  private void log(String s) {
-    Utils.log("TestRunner", 2, s);
-  }
-
-  /////
-  // Listeners
-  //
-  /**
-   * @deprecated addListener(ITestNGListener) should be used instead
-   */
-  // TODO remove it
-  @Deprecated
-  public void addListener(Object listener) {
-    if (listener instanceof ITestNGListener) {
-      addListener((ITestNGListener) listener);
-    }
+  //TODO: This method needs to be removed and we need to be leveraging addListener().
+  //Investigate and fix this.
+  void addTestListener(ITestListener listener) {
+    m_testListeners.add(listener);
   }
 
   public void addListener(ITestNGListener listener) {
@@ -1487,58 +1012,29 @@ public class TestRunner
     }
     if (listener instanceof IExecutionListener) {
       IExecutionListener iel = (IExecutionListener) listener;
-      iel.onExecutionStart();
-      m_configuration.addExecutionListener(iel);
+      if (m_configuration.addExecutionListenerIfAbsent(iel)) {
+        iel.onExecutionStart();
+      }
+    }
+    if (listener instanceof IDataProviderListener) {
+      IDataProviderListener dataProviderListener = (IDataProviderListener) listener;
+      m_dataProviderListeners.put(dataProviderListener.getClass(), dataProviderListener);
     }
     m_suite.addListener(listener);
-  }
-
-  /**
-   * @deprecated addListener(ITestNGListener) should be used instead
-   */
-  // TODO change public to package visibility
-  @Deprecated
-  public void addTestListener(ITestListener il) {
-    m_testListeners.add(il);
   }
 
   void addConfigurationListener(IConfigurationListener icl) {
     m_configurationListeners.add(icl);
   }
-  //
-  // Listeners
-  /////
 
-  private final List<InvokedMethod> m_invokedMethods = Lists.newArrayList();
+  private final Collection<IInvokedMethod> m_invokedMethods = new ConcurrentLinkedQueue<>();
 
   private void dumpInvokedMethods() {
-    System.out.println("===== Invoked methods");
-    for (IInvokedMethod im : m_invokedMethods) {
-      if (im.isTestMethod()) {
-        System.out.print("    ");
-      }
-      else if (im.isConfigurationMethod()) {
-        System.out.print("  ");
-      }
-      else {
-        continue;
-      }
-      System.out.println("" + im);
-    }
-    System.out.println("=====");
+    MethodHelper.dumpInvokedMethodsInfoToConsole(m_invokedMethods, getVerbose());
   }
 
   public List<ITestNGMethod> getInvokedMethods() {
-    List<ITestNGMethod> result= Lists.newArrayList();
-    synchronized(m_invokedMethods) {
-      for (IInvokedMethod im : m_invokedMethods) {
-        ITestNGMethod tm= im.getTestMethod();
-        tm.setDate(im.getDate());
-        result.add(tm);
-      }
-    }
-
-    return result;
+    return MethodHelper.invokedMethodsToMethods(m_invokedMethods);
   }
 
   private IResultMap m_passedConfigurations= new ResultMap();
@@ -1566,12 +1062,7 @@ public class TestRunner
     }
   }
 
-  @Deprecated
-  public void setMethodInterceptor(IMethodInterceptor methodInterceptor){
-    m_methodInterceptors.add(methodInterceptor);
-  }
-
-  public void addMethodInterceptor(IMethodInterceptor methodInterceptor){
+  void addMethodInterceptor(IMethodInterceptor methodInterceptor){
     m_methodInterceptors.add(methodInterceptor);
   }
 
@@ -1609,10 +1100,6 @@ public class TestRunner
     return m_guiceModules.get(cls);
   }
 
-  private void addGuiceModule(Class<? extends Module> cls, Module module) {
-    m_guiceModules.put(cls, module);
-  }
-
   private Map<List<Module>, Injector> m_injectors = Maps.newHashMap();
 
   @Override
@@ -1622,48 +1109,7 @@ public class TestRunner
 
   @Override
   public Injector getInjector(IClass iClass) {
-    Annotation annotation = AnnotationHelper.findAnnotationSuperClasses(Guice.class, iClass.getRealClass());
-    if (annotation == null) return null;
-    if (iClass instanceof TestClass) {
-      iClass = ((TestClass)iClass).getIClass();
-    }
-    if (!(iClass instanceof ClassImpl)) return null;
-    Injector parentInjector = ((ClassImpl)iClass).getParentInjector();
-
-    Guice guice = (Guice) annotation;
-    List<Module> moduleInstances = Lists.newArrayList(getModules(guice, parentInjector, iClass.getRealClass()));
-
-    // Reuse the previous injector, if any
-    Injector injector = getInjector(moduleInstances);
-    if (injector == null) {
-      injector = parentInjector.createChildInjector(moduleInstances);
-      addInjector(moduleInstances, injector);
-    }
-    return injector;
-  }
-
-  private Module[] getModules(Guice guice, Injector parentInjector, Class<?> testClass) {
-    List<Module> result = Lists.newArrayList();
-    for (Class<? extends Module> moduleClass : guice.modules()) {
-      List<Module> modules = getGuiceModules(moduleClass);
-      if (modules != null && modules.size() > 0) {
-        result.addAll(modules);
-      } else {
-        Module instance = parentInjector.getInstance(moduleClass);
-        result.add(instance);
-        addGuiceModule(moduleClass, instance);
-      }
-    }
-    Class<? extends IModuleFactory> factory = guice.moduleFactory();
-    if (factory != IModuleFactory.class) {
-      IModuleFactory factoryInstance = parentInjector.getInstance(factory);
-      Module moduleClass = factoryInstance.createModule(this, testClass);
-      if (moduleClass != null) {
-        result.add(moduleClass);
-      }
-    }
-
-    return result.toArray(new Module[result.size()]);
+    return guiceHelper.getInjector(iClass);
   }
 
   @Override

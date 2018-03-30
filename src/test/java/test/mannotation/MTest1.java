@@ -10,9 +10,7 @@ import org.testng.annotations.BeforeGroups;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.BeforeSuite;
 import org.testng.annotations.BeforeTest;
-import org.testng.annotations.Configuration;
 import org.testng.annotations.DataProvider;
-import org.testng.annotations.ExpectedExceptions;
 import org.testng.annotations.Factory;
 import org.testng.annotations.Parameters;
 import org.testng.annotations.Test;
@@ -25,12 +23,6 @@ import org.testng.annotations.Test;
     dataProvider = "dp", description = "Class level description")
 public class MTest1 {
 
-  @Test(enabled = true, groups = {"group5", "group6"},
-      alwaysRun = true, parameters = {"param5", "param6"},
-      dependsOnGroups = {"dg5", "dg6"}, dependsOnMethods = {"dm5", "dm6"},
-      timeOut = 242, invocationCount = 243, successPercentage = 62,
-      dataProvider = "dp3", description = "Constructor description",
-      expectedExceptions = NumberFormatException.class)
   public MTest1() {}
 
   @Test(enabled = true, groups = {"group3", "group4"},
@@ -41,25 +33,28 @@ public class MTest1 {
       expectedExceptions = NullPointerException.class)
   public void f() {}
 
-  @Configuration(beforeSuite = true, beforeTestMethod = true,
-      beforeTest = true, beforeTestClass = true,
-      beforeGroups = { "b1", "b2"})
+  @BeforeSuite
+  @BeforeTest
+  @BeforeGroups({ "b1", "b2"})
+  @BeforeClass
+  @BeforeMethod
   public void before() {}
 
-  @Configuration(afterSuite = true, afterTestMethod = true,
-      afterTest = true, afterTestClass = true,
-      afterGroups = {"a1", "a2"})
+  @AfterSuite
+  @AfterTest
+  @AfterGroups({"a1", "a2"})
+  @AfterClass
+  @AfterMethod
   public void after() {}
 
-  @Configuration(parameters = {"oparam1", "oparam2"},
-      enabled = false, groups = {"ogroup1", "ogroup2"},
-      dependsOnGroups = {"odg1","odg2"},
-      dependsOnMethods = {"odm1", "odm2"}, alwaysRun = true,
-      inheritGroups = false,
-      description = "beforeSuite description")
-   @DataProvider(name = "dp4")
-   @ExpectedExceptions({MTest1.class, MTest2.class })
-  public void otherConfigurations() {}
+  @Test(groups = {"ogroup1", "ogroup2"}, dependsOnGroups = {"odg1", "odg2"}, dependsOnMethods = {"odm1", "odm2"},
+          description = "beforeSuite description", enabled = false, alwaysRun = true,
+          expectedExceptions = {MTest1.class, MTest2.class})
+  @Parameters({"oparam1", "oparam2"})
+  @DataProvider(name = "dp4")
+  public Object[][] otherConfigurations() {
+    return null;
+  }
 
   @Factory(parameters = {"pf1", "pf2"})
   public void factory() {}

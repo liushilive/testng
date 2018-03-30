@@ -9,10 +9,5 @@ public interface IMethodInstance {
 
   ITestNGMethod getMethod();
 
-  /**
-   * @deprecated Use getInstance()
-   */
-  Object[] getInstances();
-
   Object getInstance();
 }

@@ -1,6 +1,7 @@
 package test.thread.parallelization;
 
 import com.google.common.collect.Multimap;
+import org.testng.annotations.Test;
 import org.testng.internal.collections.Pair;
 import org.testng.xml.XmlSuite;
 import org.testng.xml.XmlTest;
@@ -10,20 +11,25 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import test.thread.parallelization.TestNgRunStateTracker.EventLog;
 import test.thread.parallelization.TestNgRunStateTracker.TestNgRunEvent;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
 import static org.testng.Assert.fail;
+import static test.thread.parallelization.TestNgRunStateTracker.EventInfo.CLASS_INSTANCE;
 import static test.thread.parallelization.TestNgRunStateTracker.EventInfo.CLASS_NAME;
 import static test.thread.parallelization.TestNgRunStateTracker.EventInfo.METHOD_NAME;
 import static test.thread.parallelization.TestNgRunStateTracker.EventInfo.SUITE_NAME;
@@ -204,7 +210,7 @@ public class BaseParallelizationTest extends SimpleBaseTest {
     }
 
     //Verify that the timestamps for the events if the specified list are all increasing. That each the timestamps of
-    //a given event log is later than the event log immediately preceding it. Print the specified failure message if
+    //a given event logger is later than the event logger immediately preceding it. Print the specified failure message if
     //the assertion on the timestamps fails
     public static void verifySequentialTimingOfEvents(List<EventLog> eventLogs, String failMessage) {
         for (int i = 0; i + 1 < eventLogs.size(); i++) {
@@ -234,6 +240,16 @@ public class BaseParallelizationTest extends SimpleBaseTest {
             verifyNumberOfInstancesOfTestClassForMethods(suiteName, testName, clazz, numInstances);
         }
 
+    }
+
+    //Verify that the test methods declared in the specified list of classes have the specified number of class
+    //instances associated with them for the specified suite and test.
+    public static void verifyNumberOfInstancesOfTestClassesForMethods(String suiteName, String testName, List<Class<?>>
+            classes, int... numInstances) {
+
+        for(int i = 0; i < numInstances.length; i++) {
+            verifyNumberOfInstancesOfTestClassForMethods(suiteName, testName, classes.get(i), numInstances[i]);
+        }
     }
 
     //Verify that the test methods declared in the specified class have the specified number of class instances
@@ -292,256 +308,277 @@ public class BaseParallelizationTest extends SimpleBaseTest {
     }
 
     //Verify that methods associated with the specified event logs execute simultaneously in parallel fashion, in
-    //accordance with the expected maximum number of simultaneous executions. This verification is for blocks of
-    //parallel methods that have the same sleep delays for their execution bodies and which do not have any
-    //BeforeMethod AfterMethod, BeforeGroup or AfterGroup configuration methods.
-    public static void verifySimultaneousTestMethods(List<EventLog> testMethodEventLogs, String testName, int
-            maxSimultaneousTestMethods) {
+    //accordance with the thread count. This verification is for blocks of parallel methods, none of which use
+    //data providers. This verification is for blocks of parallel methods that have the same sleep delays for their
+    //execution bodies and which do not have any BeforeMethod AfterMethod, BeforeGroup or AfterGroup
+    //configuration methods.
+    public static void verifySimultaneousTestMethods(List<EventLog> testMethodEventLogs, String
+            testName, int  threadCount) {
 
-        int remainder = testMethodEventLogs.size() % (maxSimultaneousTestMethods * 3);
+        System.out.println("Verifying parallel execution of test methods for test named " + testName  + " with " +
+                "thread count " + threadCount);
+        System.out.println(testMethodEventLogs.size() + " test method event logs for " + testMethodEventLogs.size() / 3
+                + " test methods");
 
-        for (int i = 1; i < testMethodEventLogs.size(); i = i + maxSimultaneousTestMethods * 3) {
-            int blockSize = (remainder != 0 && testMethodEventLogs.size() - i < maxSimultaneousTestMethods * 3) ?
-                    remainder / 3 :
-                    maxSimultaneousTestMethods;
+        //Keep track of the methods that have started, but not completed execution.
+        Map<String, EventLog> methodsExecuting = new HashMap<>();
 
-            int offsetOne = (remainder != 0 && testMethodEventLogs.size() - i < maxSimultaneousTestMethods * 3) ?
-                    testMethodEventLogs.size() - remainder :
-                    i - 1;
+        //Keep track of the methods whose start, execute and test method pass events have all been found in the list
+        //of logs
+        Map<String, EventLog> methodsCompleted = new HashMap<>();
 
-            int offsetTwo = (remainder != 0 && testMethodEventLogs.size() - i < maxSimultaneousTestMethods * 3) ?
-                    testMethodEventLogs.size() - remainder + blockSize :
-                    i + maxSimultaneousTestMethods - 1;
+        //Keep track of the thread IDs for all the methods that are executing and check that all a method's events
+        //run in the same thread.
+        List<Long> executingMethodThreadIds = new ArrayList<>();
 
-            List<EventLog> eventLogMethodListenerStartSublist = testMethodEventLogs.subList(offsetOne, offsetTwo);
-            List<EventLog> eventLogMethodExecuteSublist = testMethodEventLogs.subList(offsetTwo, offsetTwo + blockSize);
-            List<EventLog> eventLogMethodListenerPassSublist = testMethodEventLogs.subList(offsetTwo + blockSize,
-                    offsetTwo + 2 * blockSize);
+        //Make a list of the all the thread IDs of the first batch of start method events and check that no other
+        //thread IDs are found in the rest of the event logs.
+        List<Long> allThreadIds = new ArrayList<>();
 
-            verifySimultaneousTestMethodListenerStartEvents(eventLogMethodListenerStartSublist, testName,
-                    maxSimultaneousTestMethods);
+        //If number of test methods is more than the thread count, then the first block of methods will be equal to
+        //the thread count. If not, it will be equal to the total number of methods.
+        int blockSize = testMethodEventLogs.size() / 3 >= threadCount ? threadCount :
+                testMethodEventLogs.size() / 3;
 
-            verifySimultaneousTestMethodExecutionEvents(eventLogMethodExecuteSublist, testName,
-                    maxSimultaneousTestMethods);
+        //Get the start events for the first batch of methods.
+        List<EventLog> eventLogTestMethodListenerStartEvents = testMethodEventLogs.subList(0, blockSize);
 
-            verifyEventsBelongToSameMethods(eventLogMethodListenerStartSublist, eventLogMethodExecuteSublist, "The " +
-                    "expected maximum number of methods to execute simultaneously is " + maxSimultaneousTestMethods +
-                    " for " + testName + " so no more than " + maxSimultaneousTestMethods + " methods should be " +
-                    "running at the same time. The test execution event logs for a block of simultaneously running " +
-                    "test methods should all belong to the same methods as the test method listener onTestStart " +
-                    "event logs immediately preceding");
+        System.out.println("First " + blockSize + " test method event logs should all be test method start events: " +
+                getStringForEventLogList(eventLogTestMethodListenerStartEvents));
 
-            verifySimultaneousTestMethodListenerPassEvents(eventLogMethodListenerPassSublist, testName,
-                    maxSimultaneousTestMethods);
+        //Verify that all the events in the sublist extracted for the start events of the block of methods expected
+        //to execute in parallel all have the test method start event type and that they all executed in different
+        //threads.
+        verifySimultaneousTestMethodListenerStartEvents(eventLogTestMethodListenerStartEvents, testName, blockSize);
 
-            verifyEventsBelongToSameMethods(eventLogMethodExecuteSublist, eventLogMethodListenerPassSublist, "The " +
-                    "expected maximum number of methods to execute simultaneously is " + maxSimultaneousTestMethods +
-                    " for " + testName + " so no more than " + maxSimultaneousTestMethods + " methods should be " +
-                    "running at the same time. The test method listener on onTestSuccess event logs for a block of " +
-                    "simultaneously running test methods should all belong to the same methods as the test method " +
-                    "execution event logs immediately preceding");
+        //Keep track of the current methods that are executing and their thread IDs
+        for(EventLog eventLog : eventLogTestMethodListenerStartEvents) {
+            String classAndMethodNameAndInstanceHash = (String)eventLog.getData(CLASS_NAME) + "." +
+                    (String)eventLog.getData(METHOD_NAME) + ":" + eventLog.getData(CLASS_INSTANCE).hashCode();
+
+            assertNull(methodsExecuting.get(classAndMethodNameAndInstanceHash), "There should only be one start " +
+                    "event logged for a method in the first block of test method events");
+            assertFalse(executingMethodThreadIds.contains(eventLog.getThreadId()), "The first block of test method " +
+                    "events should all have different thread IDs");
+
+            methodsExecuting.put(classAndMethodNameAndInstanceHash, eventLog);
+            executingMethodThreadIds.add(eventLog.getThreadId());
+            allThreadIds.add(eventLog.getThreadId());
+        }
+
+        for(int i = blockSize; i < testMethodEventLogs.size(); i++) {
+            EventLog eventLog = testMethodEventLogs.get(i);
+
+            System.out.println("Processing test method event log at index " + i + ": " + eventLog);
+
+            String classAndMethodNameAndInstanceHash = (String)eventLog.getData(CLASS_NAME) + "." +
+                    (String)eventLog.getData(METHOD_NAME) + ":" + eventLog.getData(CLASS_INSTANCE).hashCode();
+
+            if(eventLog.getEvent() == LISTENER_TEST_METHOD_START) {
+                assertTrue(methodsExecuting.get(classAndMethodNameAndInstanceHash) == null &&
+                        methodsCompleted.get(classAndMethodNameAndInstanceHash) == null, "There should only be one " +
+                        "execution of any given method");
+                assertFalse(executingMethodThreadIds.contains(eventLog.getThreadId()), "Event logs for currently " +
+                        "executing test methods should have different thread IDs");
+                assertTrue(allThreadIds.contains(eventLog.getThreadId()), "All of the test method event logs should " +
+                        "have the same " + threadCount + " thread IDs: " + allThreadIds.toString());
+                assertTrue(methodsExecuting.size() < threadCount, "The current event log is a test method start " +
+                        "event. The list of currently executing methods should be less than the thread count. " +
+                        "Thread count: " + threadCount + ". Currently executing methods: " +
+                        getStringForEventLogList(methodsExecuting.values()));
+
+                methodsExecuting.put(classAndMethodNameAndInstanceHash, eventLog);
+                executingMethodThreadIds.add(eventLog.getThreadId());
+            }
+
+            if(eventLog.getEvent() == TEST_METHOD_EXECUTION) {
+                assertTrue(methodsExecuting.get(classAndMethodNameAndInstanceHash) != null, "Found a test method " +
+                        "execution event log that does not have a corresponding test method start event log");
+                assertTrue(methodsExecuting.get(classAndMethodNameAndInstanceHash).getThreadId() ==
+                        eventLog.getThreadId(), "All the event logs for a given method should have the same thread ID");
+            }
+
+            if(eventLog.getEvent() == LISTENER_TEST_METHOD_PASS) {
+
+                assertTrue(methodsExecuting.get(classAndMethodNameAndInstanceHash) != null, "Found a test method " +
+                        "pass event log that does not have a corresponding test method start event log");
+                assertTrue(methodsExecuting.get(classAndMethodNameAndInstanceHash).getThreadId() ==
+                        eventLog.getThreadId(), "All the event logs for a given method should have the same thread ID");
+                methodsExecuting.remove(classAndMethodNameAndInstanceHash);
+                executingMethodThreadIds.remove(eventLog.getThreadId());
+                methodsCompleted.put(classAndMethodNameAndInstanceHash, eventLog);
+            }
         }
     }
 
+    //Verify that methods associated with the specified event logs execute simultaneously in parallel fashion, in
+    //accordance with the thread count. This verification is for blocks of parallel methods, some of which use
+    //non-parallel data providers without factories, so all the invocations of the methods run on the same class
+    //instances. This verification is for blocks of parallel methods that have the same sleep delays for their
+    //execution bodies and which do not have any BeforeMethod AfterMethod, BeforeGroup or AfterGroup
+    //configuration methods.
+    //
+    //Some of the test methods use non-parallel data providers without factories. All the invocations of those
+    //test methods will occur serially within the same thread on the same class instances. There are three test
+    //method events expected per test method: a start event, an execution event, and a test method pass event.
     public static void verifyParallelTestMethodsWithNonParallelDataProvider(List<EventLog> testMethodEventLogs, String
-            testName, Map<String, Integer> expectedInvocationCounts, int numUniqueMethods, int
-            maxSimultaneousTestMethods) {
+            testName, Map<String, Integer> expectedInvocationCounts, int numUniqueMethods, int threadCount) {
+
+        System.out.println("Verifying parallel execution of test methods using non-parallel data providers for " +
+                "test named " + testName + " with thread count " + threadCount);
+        System.out.println(testMethodEventLogs.size() + " test method event logs for " + numUniqueMethods +
+                " unique methods");
 
         Map<String, EventLog> methodsExecuting = new HashMap<>();
         Map<String, EventLog> methodsCompleted = new HashMap<>();
+
+        //Because this method verifies combination of parallel-by-methods mode and the use of non-parallel data
+        //providers without factories, it is necessary to track the number of times that test methods are invoked in
+        //order to check that this is consistent with the number of times they are expected to be invoked based on
+        //their use of non-parallel data providers.
         Map<String, Integer> methodInvocationsCounts = new HashMap<>();
+
+        //In order to verify that all invocations of test methods which use non-parallel data providers occur in the
+        //same thread, it is necessary to keep track of the thread IDs of methods that are executing within a
+        //block of simultaneously executing methods.
         Map<String, Long> executingMethodThreadIds = new HashMap<>();
 
-        int blockSize = numUniqueMethods >= maxSimultaneousTestMethods ? maxSimultaneousTestMethods :
-                numUniqueMethods;
+        //Make a list of the all the thread IDs of the first batch of start method events and check that no other
+        //thread IDs are found in the rest of the event logs.
+        List<Long> allThreadIds = new ArrayList<>();
 
-        for (int i = 1; i < testMethodEventLogs.size(); i = i + blockSize * 3) {
+        //The logic for determining the block size of simultaneously executing parallel methods is initially determined
+        //by whether the total number of unique methods less than the thread count. If it is less than the thread count,
+        //then the block size is equal to the number of unique methods. Those methods will execute in parallel
+        //until all invocations of all the methods completes. Otherwise, there are more methods queued up than the
+        //thread count, so the block size is equal to the thread count.
+        int blockSize = numUniqueMethods >= threadCount ? threadCount : numUniqueMethods;
 
-            if(i != 1) {
-                if(numUniqueMethods == 0) {
-                    blockSize = methodsExecuting.keySet().size();
-                } else if(numUniqueMethods < maxSimultaneousTestMethods) {
-                    if(methodsExecuting.keySet().size() == maxSimultaneousTestMethods &&
-                            allExecutingMethodsHaveMoreInvocations(methodsExecuting, methodInvocationsCounts,
-                                    expectedInvocationCounts)) {
-                        blockSize = methodsExecuting.keySet().size();
-                    } else {
-                        blockSize = numUniqueMethods + methodsExecuting.keySet().size();
-                    }
+        //Get the start events for the first batch of methods.
+        List<EventLog> eventLogTestMethodListenerStartEvents = testMethodEventLogs.subList(0, blockSize);
+
+        System.out.println("First " + blockSize + " test method event logs should all be test method start events: "+
+                "\n" + getStringForEventLogList(eventLogTestMethodListenerStartEvents));
+        System.out.println(getStringForEventLogList(eventLogTestMethodListenerStartEvents));
+
+        //Keep track of the current methods that are executing and their thread IDs
+        for(EventLog eventLog : eventLogTestMethodListenerStartEvents) {
+            String classAndMethodName = (String)eventLog.getData(CLASS_NAME) + "." +
+                    (String)eventLog.getData(METHOD_NAME);
+
+            assertNull(methodsExecuting.get(classAndMethodName), "There should only be one start event logged for a " +
+                    "method in the first block of test method events");
+            assertNull(executingMethodThreadIds.get(classAndMethodName), "The first block of test method events " +
+                    "should all have different thread IDs");
+
+            methodsExecuting.put(classAndMethodName, eventLog);
+            executingMethodThreadIds.put(classAndMethodName, eventLog.getThreadId());
+            allThreadIds.add(eventLog.getThreadId());
+            methodInvocationsCounts.put(classAndMethodName, 1);
+        }
+
+        //Verify that all the events in the sublist extracted for the test method execution events of the block of
+        //methods expected to execute in parallel all have the test method execution event type and that they all
+        //executed in different threads.
+        verifySimultaneousTestMethodListenerStartEvents(eventLogTestMethodListenerStartEvents, testName, blockSize);
+
+        for(int i = blockSize; i < testMethodEventLogs.size(); i++) {
+
+            EventLog eventLog = testMethodEventLogs.get(i);
+
+            System.out.println("Processing test method event log at index " + i + ": " + eventLog);
+
+            String classAndMethodName = (String)eventLog.getData(CLASS_NAME) + "." +
+                    (String)eventLog.getData(METHOD_NAME);
+
+            if(i != blockSize) {
+                //All methods that are in the list of currently executing methods should still have invocations left.
+                //Otherwise, they would have been removed from that list and added to the completed methods list.
+                allExecutingMethodsHaveMoreInvocations(methodsExecuting, methodInvocationsCounts,
+                        expectedInvocationCounts);
+            }
+
+            if(eventLog.getEvent() == LISTENER_TEST_METHOD_START) {
+                assertTrue(executingMethodThreadIds.get(classAndMethodName) == null ||
+                        executingMethodThreadIds.get(classAndMethodName) == eventLog.getThreadId(),
+                        "Event logs for all invocations of a method on a give class instance should have the same " +
+                                "thread ID ");
+
+                for(String key : executingMethodThreadIds.keySet()) {
+                   if(!key.equals(classAndMethodName)) {
+                       assertFalse(executingMethodThreadIds.get(key) == eventLog.getThreadId(), "Events for " +
+                               "different methods should have different thread IDs");
+                   }
+                }
+
+                assertTrue(allThreadIds.contains(eventLog.getThreadId()), "All of the test method event logs should " +
+                        "have the same " + threadCount + " thread IDs: " + allThreadIds.toString());
+
+                if(methodsExecuting.get(classAndMethodName) == null) {
+                    assertTrue(methodsExecuting.size() < threadCount, "The current event log is a test method start " +
+                            "event for a method that has not yet been invoked. The list of currently executing " +
+                            "methods should be less than the thread count. Thread count: " + threadCount +
+                            ". Currently executing methods: " + getStringForEventLogList(methodsExecuting.values()));
+
+                    methodsExecuting.put(classAndMethodName, eventLog);
+                    executingMethodThreadIds.put(classAndMethodName, eventLog.getThreadId());
+                    methodInvocationsCounts.put(classAndMethodName, 1);
+                } else {
+                    methodInvocationsCounts.put(
+                            classAndMethodName,
+                            methodInvocationsCounts.get(classAndMethodName) + 1);
+                    assertTrue(methodInvocationsCounts.get(classAndMethodName) <=
+                            expectedInvocationCounts.get(classAndMethodName),
+                            "Method '" + classAndMethodName + "' is expected to execute only " +
+                                    expectedInvocationCounts.get(classAndMethodName) + " times, but event logs show " +
+                                    "that it was execute at least " +
+                                    methodInvocationsCounts.get(classAndMethodName) + " times");
                 }
             }
 
-            int offsetOne = i - 1;
-
-            int offsetTwo = i + blockSize - 1;
-
-            List<EventLog> eventLogMethodListenerStartSublist = testMethodEventLogs.subList(offsetOne, offsetTwo);
-            List<EventLog> eventLogMethodExecuteSublist = testMethodEventLogs.subList(offsetTwo, offsetTwo + blockSize);
-            List<EventLog> eventLogMethodListenerPassSublist = testMethodEventLogs.subList(offsetTwo + blockSize,
-                    offsetTwo + 2 * blockSize);
-
-            int decrementUniqueMethods = verifySimultaneousTestMethodListenerStartEvents(
-                    eventLogMethodListenerStartSublist, testName, maxSimultaneousTestMethods, methodsExecuting,
-                    executingMethodThreadIds, methodInvocationsCounts, expectedInvocationCounts
-            );
-
-            numUniqueMethods = numUniqueMethods - decrementUniqueMethods;
-
-            verifySimultaneousTestMethodExecutionEvents(eventLogMethodExecuteSublist, testName,
-                    executingMethodThreadIds, maxSimultaneousTestMethods);
-
-            verifyEventsBelongToSameMethods(eventLogMethodListenerStartSublist, eventLogMethodExecuteSublist, "The " +
-                    "expected maximum number of methods to execute simultaneously is " + maxSimultaneousTestMethods +
-                    " for " + testName + " so no more than " + maxSimultaneousTestMethods + " methods should be " +
-                    "running at the same time. The test execution event logs for a block of simultaneously running " +
-                    "test methods should all belong to the same methods as the test method listener onTestStart " +
-                    "event logs immediately preceding");
-
-            verifySimultaneousTestMethodListenerPassEvents(eventLogMethodListenerPassSublist, testName,
-                    maxSimultaneousTestMethods, methodsExecuting, methodsCompleted, executingMethodThreadIds,
-                    methodInvocationsCounts, expectedInvocationCounts);
-
-            verifyEventsBelongToSameMethods(eventLogMethodExecuteSublist, eventLogMethodListenerPassSublist, "The " +
-                    "expected maximum number of methods to execute simultaneously is " + maxSimultaneousTestMethods +
-                    " for " + testName + " so no more than " + maxSimultaneousTestMethods + " methods should be " +
-                    "running at the same time. The test method listener on onTestSuccess event logs for a block of " +
-                    "simultaneously running test methods should all belong to the same methods as the test method " +
-                    "execution event logs immediately preceding");
-
-        }
-    }
-
-    public static int verifySimultaneousTestMethodListenerStartEvents(List<EventLog> listenerStartEventLogs, String
-            testName, int maxSimultaneousTestMethods, Map<String, EventLog> methodsExecuting, Map<String, Long>
-            executingMethodThreadIds, Map<String, Integer> methodInvocationsCounts, Map<String, Integer>
-            expectedInvocationCounts) {
-
-        verifySimultaneousTestMethodListenerStartEvents(listenerStartEventLogs, testName, maxSimultaneousTestMethods);
-
-        int decrement = 0;
-
-        for (EventLog eventLog : listenerStartEventLogs) {
-
-            String classAndMethodName = (String)eventLog.getData(CLASS_NAME) + "." +
-                    (String)eventLog.getData(METHOD_NAME);
-
-            if(methodInvocationsCounts.get(classAndMethodName) == null) {
-                methodInvocationsCounts.put(classAndMethodName, 1);
-                decrement++;
-            } else {
-                methodInvocationsCounts.put(classAndMethodName,
-                        methodInvocationsCounts.get(classAndMethodName) + 1);
+            if(eventLog.getEvent() == TEST_METHOD_EXECUTION) {
+                assertTrue(methodsExecuting.get(classAndMethodName) != null, "Found a test method execution event " +
+                        "log that does not have a corresponding test method start event log");
+                assertTrue(methodsExecuting.get(classAndMethodName).getThreadId() ==
+                        eventLog.getThreadId(), "All the event logs for a given method should have the same thread ID");
             }
 
-            assertFalse(methodInvocationsCounts.get(classAndMethodName) >
-                    expectedInvocationCounts.get(classAndMethodName), "Method '" + classAndMethodName +
-                    "' is expected to execute only " +  expectedInvocationCounts.get(classAndMethodName) +
-                    " times, but event logs show that it was execute at least " +
-                    methodInvocationsCounts.get(classAndMethodName) + " times");
+            if(eventLog.getEvent() == LISTENER_TEST_METHOD_PASS) {
 
-            if (methodsExecuting.keySet().contains(classAndMethodName)) {
-                assertTrue(eventLog.getThreadId() == executingMethodThreadIds.get(classAndMethodName), "All " +
-                        "invocations of method '" + classAndMethodName + "' should execute in the same " +
-                        "thread");
-            } else {
-                assertFalse(executingMethodThreadIds.values().contains(eventLog.getThreadId()), "Event logs " +
-                        "for currently executing methods should have different thread IDs: " + classAndMethodName);
-            }
+                assertTrue(methodsExecuting.get(classAndMethodName) != null, "Found a test method pass event log " +
+                        "that does not have a corresponding test method start event log");
+                assertTrue(methodsExecuting.get(classAndMethodName).getThreadId() ==
+                        eventLog.getThreadId(), "All the event logs for a given method should have the same thread ID");
 
-            if(methodsExecuting.get(classAndMethodName) == null) {
-                methodsExecuting.put(classAndMethodName, eventLog);
-                executingMethodThreadIds.put(classAndMethodName, eventLog.getThreadId());
-            }
-        }
+                if(methodInvocationsCounts.get(classAndMethodName)
+                        .equals(expectedInvocationCounts.get(classAndMethodName))) {
+                    methodsExecuting.remove(classAndMethodName);
+                    executingMethodThreadIds.remove(classAndMethodName);
+                    methodsCompleted.put(classAndMethodName, eventLog);
+                }
 
-        return decrement;
-    }
-
-    public static void verifySimultaneousTestMethodExecutionEvents(List<EventLog> testMethodExecutionEventLogs, String
-            testName, Map<String, Long> executingMethodThreadIds, int maxSimultaneousTestMethods) {
-
-        verifySimultaneousTestMethodExecutionEvents(testMethodExecutionEventLogs, testName, maxSimultaneousTestMethods);
-
-        for(EventLog eventLog : testMethodExecutionEventLogs) {
-            String classAndMethodName = (String)eventLog.getData(CLASS_NAME) + "." +
-                    (String)eventLog.getData(METHOD_NAME);
-
-            assertTrue(eventLog.getThreadId() == executingMethodThreadIds.get(classAndMethodName), "All the " +
-                    "test method event logs for a given method should have the same thread ID");
-        }
-    }
-
-    public static void verifySimultaneousTestMethodListenerPassEvents(List<EventLog> testMethodListenerPassEventLogs,
-            String testName, int maxSimultaneousTestMethods, Map<String, EventLog> methodsExecuting,
-            Map<String, EventLog> methodsCompleted, Map<String, Long> executingMethodThreadIds, Map<String, Integer>
-            methodInvocationsCounts, Map<String, Integer> expectedInvocationCounts) {
-
-        verifySimultaneousTestMethodListenerPassEvents(testMethodListenerPassEventLogs, testName,
-                maxSimultaneousTestMethods);
-
-        for(EventLog eventLog : testMethodListenerPassEventLogs) {
-            String classAndMethodName = (String)eventLog.getData(CLASS_NAME) + "." +
-                    (String)eventLog.getData(METHOD_NAME);
-
-            assertTrue(eventLog.getThreadId() == executingMethodThreadIds.get(classAndMethodName), "All the " +
-                    "test method event logs for a given method should have the same thread ID");
-
-            if(methodInvocationsCounts.get(classAndMethodName)
-                    .equals(expectedInvocationCounts.get(classAndMethodName))) {
-                methodsExecuting.remove(classAndMethodName);
-                executingMethodThreadIds.remove(classAndMethodName);
-                methodsCompleted.put(classAndMethodName, eventLog);
+                System.out.println(classAndMethodName + " has executed " +
+                        methodInvocationsCounts.get(classAndMethodName) + " times. Expected to execute " +
+                            (expectedInvocationCounts.get(classAndMethodName) -
+                                    methodInvocationsCounts.get(classAndMethodName)) + " more times");
             }
         }
-
     }
 
     //Verify that the specified test method listener onTestStart event logs execute simultaneously in parallel fashion
     //according to the expected maximum number of simultaneous executions. Verifies that each of them has the same
     //event type and all have different thread IDs.
     public static void verifySimultaneousTestMethodListenerStartEvents(List<EventLog> listenerStartEventLogs, String
-            testName, int maxSimultaneousTestMethods) {
+            testName, int blockSize) {
 
-        verifyEventTypeForEventsLogs(listenerStartEventLogs, LISTENER_TEST_METHOD_START, "The expected maximum " +
-                "number of methods to execute simultaneously is " + maxSimultaneousTestMethods + " for " + testName +
-                " so more no more than " + maxSimultaneousTestMethods + " methods should start running at the same " +
-                "time if there are more than " + maxSimultaneousTestMethods + " methods remaining to execute. Event " +
-                "logs: " + listenerStartEventLogs);
-        verifyDifferentThreadIdsForEvents(listenerStartEventLogs, "The expected maximum number of methods to execute " +
-                "simultaneously is " + maxSimultaneousTestMethods + " for " + testName + " so the thread IDs for all " +
-                "the test method listener's onTestStart method " + "the " + maxSimultaneousTestMethods + "currently " +
-                "executing test methods should be different. Event logs: " + listenerStartEventLogs);
-    }
+        verifyEventTypeForEventsLogs(listenerStartEventLogs, LISTENER_TEST_METHOD_START, "Expected " + blockSize +
+                " test method start event logs to be in a block of methods executing in parallel. Found an event log " +
+                "of a different type in the block being processed: " + listenerStartEventLogs);
 
-    //Verify that the specified test method execution event logs execute simultaneously in parallel fashion according
-    //to the specified thread count. Verifies that each of them has the same event type and all have different thread
-    //IDs.
-    public static void verifySimultaneousTestMethodExecutionEvents(List<EventLog> testMethodExecutionEventLogs,
-            String testName, int maxSimultaneousTestMethods) {
-
-        verifyEventTypeForEventsLogs(testMethodExecutionEventLogs, TEST_METHOD_EXECUTION, "The expected maximum " +
-                "number of methods to execute simultaneously is " + maxSimultaneousTestMethods + " for " + testName +
-                " so no more than " + maxSimultaneousTestMethods + " methods should be " + "executing at the same " +
-                "time. Event logs: " + testMethodExecutionEventLogs);
-        verifyDifferentThreadIdsForEvents(testMethodExecutionEventLogs, "The expected maximum number of methods to " +
-                "execute simultaneously is " + maxSimultaneousTestMethods + " for " + testName + " so the thread IDs " +
-                "for the test method execution events for the " + maxSimultaneousTestMethods + "currently executing " +
-                "test methods should be different. Event logs: " + testMethodExecutionEventLogs);
-    }
-
-    //Verify that the specified test method listener onTestSuccess event logs execute simultaneously in parallel
-    //fashion according to the specified thread count. Verifies that each of them has the same event type and all have
-    //different thread IDs.
-    public static void verifySimultaneousTestMethodListenerPassEvents(List<EventLog> testMethodListenerPassEventLogs,
-            String testName, int maxSimultaneousTestMethods) {
-        verifyEventTypeForEventsLogs(testMethodListenerPassEventLogs, LISTENER_TEST_METHOD_PASS, "The thread " +
-                "count is " + maxSimultaneousTestMethods + " for " + testName + " so no more than " +
-                maxSimultaneousTestMethods + " test listener " + "onTestSuccess methods should be executing at the " +
-                "same time. Event logs: " + testMethodListenerPassEventLogs);
-        verifyDifferentThreadIdsForEvents(testMethodListenerPassEventLogs, "The expected maximum number of methods " +
-                "to execute simultaneously is " + maxSimultaneousTestMethods + " for " + testName + " so the thread " +
-                "IDs for the test method listener onTestSuccess events for the " + maxSimultaneousTestMethods +
-                "currently executing test methods should be different. Event logs: " + testMethodListenerPassEventLogs);
+        verifyDifferentThreadIdsForEvents(listenerStartEventLogs, "Expected " + blockSize + " test method start " +
+                "event logs to be in a block of methods executing in parallel. Each one of these event logs should " +
+                "be associated with a different thread ID, but found that at two event logs share the same thread " +
+                "ID: " + listenerStartEventLogs);
     }
 
     //Verify that the test method level events for the test methods declared in the specified class run in the same
@@ -550,14 +587,26 @@ public class BaseParallelizationTest extends SimpleBaseTest {
             testName) {
 
         for (Method method : testClass.getMethods()) {
-            if (method.getDeclaringClass().equals(testClass)) {
+            boolean isTestMethod = false;
+
+            Annotation[] annotations = method.getDeclaredAnnotations();
+
+            for(Annotation a : annotations) {
+                if(Test.class.isAssignableFrom(a.getClass())) {
+                    isTestMethod = true;
+                }
+            }
+
+            if (method.getDeclaringClass().equals(testClass) && isTestMethod) {
                 Multimap<Object, EventLog> testMethodEventLogs = getTestMethodEventLogsForMethod(suiteName, testName,
                         testClass.getCanonicalName(), method.getName());
 
                 for (Object instanceKey : testMethodEventLogs.keySet()) {
+
                     long threadId = -1;
 
                     for (EventLog eventLog : testMethodEventLogs.get(instanceKey)) {
+
                         if (threadId == -1) {
                             threadId = eventLog.getThreadId();
                         } else {
@@ -583,7 +632,7 @@ public class BaseParallelizationTest extends SimpleBaseTest {
             assertTrue(suiteLevelEventLogs.get(i).getEvent() == LISTENER_SUITE_START &&
                     suiteLevelEventLogs.get(i + 1).getEvent() == LISTENER_SUITE_FINISH, "Because the suites are " +
                     "expected to execute sequentially, the suite level event logs should consist of a series of " +
-                    "pairs of a suite listener onStart event log followed by a suite listener onFinish event log: " +
+                    "pairs of a suite listener onStart event logger followed by a suite listener onFinish event logger: " +
                     suiteLevelEventLogs);
             suiteListenerStartEventLogs.add((suiteLevelEventLogs.get(i)));
         }
@@ -596,7 +645,7 @@ public class BaseParallelizationTest extends SimpleBaseTest {
             List<EventLog> secondSuiteEventLogs = suiteEventLogsMap.get(secondSuite);
 
             verifySequentialTimingOfEvents(firstSuiteEventLogs, secondSuiteEventLogs, "The first suite listener " +
-                    "onStart event log is for " + firstSuite + " and the second suite listener onStart event log is " +
+                    "onStart event logger is for " + firstSuite + " and the second suite listener onStart event logger is " +
                     "for " + secondSuite + ". Because the suites are supposed to execute sequentially, all of the " +
                     "event logs for " + firstSuite + " should have timestamps earlier than all of the event logs for " +
                     secondSuite + ". First suite event logs: " + firstSuiteEventLogs + ". Second suite event logs: " +
@@ -617,15 +666,15 @@ public class BaseParallelizationTest extends SimpleBaseTest {
 
         verifyEventsOccurBetween(suiteListenerOnStartEventLog, testLevelEventLogs, suiteListenerOnFinishEventLog,
                 "All of the test level event logs should have timestamps between the suite listener's onStart and " +
-                        "onFinish event logs. Suite listener onStart event log: " + suiteListenerOnStartEventLog +
-                        ". Suite listener onFinish event log: " + suiteListenerOnFinishEventLog + ". Test level " +
+                        "onFinish event logs. Suite listener onStart event logger: " + suiteListenerOnStartEventLog +
+                        ". Suite listener onFinish event logger: " + suiteListenerOnFinishEventLog + ". Test level " +
                         "event logs: " + testLevelEventLogs);
 
         for (int i = 0; i < testLevelEventLogs.size(); i = i + 2) {
             assertTrue(testLevelEventLogs.get(i).getEvent() == LISTENER_TEST_START &&
                     testLevelEventLogs.get(i + 1).getEvent() == LISTENER_TEST_FINISH, "Because the tests are " +
                     "expected to execute sequentially, the test level event logs should consist of a series of " +
-                    "pairs of a test listener onStart event log followed by a test listener onFinish event log: " +
+                    "pairs of a test listener onStart event logger followed by a test listener onFinish event logger: " +
                     testLevelEventLogs);
         }
     }
@@ -689,8 +738,8 @@ public class BaseParallelizationTest extends SimpleBaseTest {
 
                 if (eventLog.getEvent() == LISTENER_SUITE_FINISH) {
 
-                    assertTrue(suitesExecuting.get(suiteName) != null, "Found an event log for a suite listener " +
-                            "onFinish event that does not have a corresponding event log for a suite listener " +
+                    assertTrue(suitesExecuting.get(suiteName) != null, "Found an event logger for a suite listener " +
+                            "onFinish event that does not have a corresponding event logger for a suite listener " +
                             "onStart event");
                     assertTrue(suitesExecuting.get(suiteName).getThreadId() == eventLog.getThreadId(), "All the " +
                             "suite level event logs for a given suite should have the same thread ID");
@@ -721,23 +770,6 @@ public class BaseParallelizationTest extends SimpleBaseTest {
         verifyDifferentThreadIdsForEvents(suiteListenerStartEventLogs, "The thread count is " + threadPoolSize +
                 " so the thread IDs for the suite listener onStart events for simultaneously executing suites " +
                 "should be different. Event logs: " + suiteListenerStartEventLogs);
-    }
-
-    //Helper which verifies that the specified lists of test method level events are associated with the same methods
-    private static void verifyEventsBelongToSameMethods(List<EventLog> firstEventLogs, List<EventLog> secondEventLogs,
-            String faiMessage) {
-
-        List<String> methodNames = new ArrayList<>();
-
-        for (EventLog eventLog : firstEventLogs) {
-            methodNames.add((String)eventLog.getData(CLASS_NAME) + (String)eventLog.getData(METHOD_NAME));
-        }
-
-        for (EventLog eventLog : secondEventLogs) {
-
-            assertTrue(methodNames.contains((String)eventLog.getData(CLASS_NAME) +
-                    (String)eventLog.getData(METHOD_NAME)), faiMessage);
-        }
     }
 
     //Helper method that retrieves the earliest and latest timestamps for the specified list of event logs
@@ -776,6 +808,20 @@ public class BaseParallelizationTest extends SimpleBaseTest {
         }
 
         return true;
+    }
+
+    private static String getStringForEventLogList(Collection<EventLog> list)  {
+        StringBuilder sb = new StringBuilder();
+        ArrayList<EventLog> eventLogs = new ArrayList<>(list);
+
+        for(int i = 0; i < eventLogs.size(); i++) {
+            sb.append(eventLogs.get(i));
+            if(i != eventLogs.size() - 1) {
+                sb.append("\n");
+            }
+        }
+
+        return sb.toString();
     }
 }
 

@@ -1,14 +1,7 @@
 package org.testng.internal.reflect;
 
-import org.testng.internal.ThreeStateBoolean;
-
-import static org.testng.internal.ThreeStateBoolean.FALSE;
-import static org.testng.internal.ThreeStateBoolean.TRUE;
-
 /**
  * Checks the conformance as per data-provide specifications.
- *
- * @author <a href="mailto:nitin.matrix@gmail.com">Nitin Verma</a>
  */
 public class DataProviderMethodMatcher extends AbstractMethodMatcher {
 
@@ -42,8 +35,8 @@ public class DataProviderMethodMatcher extends AbstractMethodMatcher {
    * {@inheritDoc}
    */
   @Override
-  public Object[] getConformingArguments() throws MethodMatcherException {
-    if (ThreeStateBoolean.NONE.equals(getConforms())) {
+  public Object[] getConformingArguments(){
+    if (getConforms() == null) {
       conforms();
     }
     if (matchingMatcher != null) {

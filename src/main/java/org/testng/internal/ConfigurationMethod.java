@@ -26,10 +26,7 @@ import org.testng.internal.annotations.IBeforeSuite;
 import org.testng.internal.annotations.IBeforeTest;
 
 public class ConfigurationMethod extends BaseTestMethod {
-  /**
-   *
-   */
-  private static final long serialVersionUID = -6537771498553619645L;
+
   private final boolean m_isBeforeSuiteConfiguration;
   private final boolean m_isAfterSuiteConfiguration;
 
@@ -358,10 +355,10 @@ public class ConfigurationMethod extends BaseTestMethod {
       initGroups(IAfterTest.class);
     }
      if (annotation.getBeforeGroups().length != 0) {
-      initGroups(IBeforeGroups.class);
+      initBeforeAfterGroups(IBeforeGroups.class, annotation.getBeforeGroups());
     }
      if (annotation.getAfterGroups().length != 0) {
-      initGroups(IAfterGroups.class);
+       initBeforeAfterGroups(IAfterGroups.class, annotation.getAfterGroups());
     }
      if (annotation.getBeforeTestClass()) {
       initGroups(IBeforeClass.class);

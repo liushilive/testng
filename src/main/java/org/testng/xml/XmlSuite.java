@@ -1,10 +1,8 @@
 package org.testng.xml;
 
-import java.io.Serializable;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 
 import org.testng.ITestObjectFactory;
@@ -12,22 +10,16 @@ import org.testng.TestNG;
 import org.testng.collections.Lists;
 import org.testng.collections.Maps;
 import org.testng.internal.Utils;
-import org.testng.reporters.XMLStringBuffer;
 import org.testng.xml.dom.OnElement;
 import org.testng.xml.dom.OnElementList;
 import org.testng.xml.dom.Tag;
 
-import static org.testng.collections.CollectionUtils.hasElements;
-import static org.testng.internal.Utils.isStringNotEmpty;
 import static org.testng.xml.XmlSuite.ParallelMode.skipDeprecatedValues;
 
 /**
  * This class describes the tag &lt;suite&gt; in testng.xml.
- *
- * @author <a href = "mailto:cedric&#64;beust.com">Cedric Beust</a>
- * @author <a href = 'mailto:the_mindstorm[at]evolva[dot]ro'>Alexandru Popescu</a>
  */
-public class XmlSuite implements Serializable, Cloneable {
+public class XmlSuite implements Cloneable {
   /** Parallel modes */
   public enum ParallelMode {
     TESTS("tests", false), METHODS("methods"), CLASSES("classes"), INSTANCES("instances"), NONE("none", false),
@@ -47,12 +39,12 @@ public class XmlSuite implements Serializable, Cloneable {
 
     public static XmlSuite.ParallelMode getValidParallel(String parallel) {
       if (parallel == null) {
-        return null;
+        return ParallelMode.NONE;
       }
       try {
         return XmlSuite.ParallelMode.valueOf(parallel.toUpperCase());
       } catch (IllegalArgumentException e) {
-        return null;
+        return ParallelMode.NONE;
       }
     }
 
@@ -135,7 +127,6 @@ public class XmlSuite implements Serializable, Cloneable {
 
   /** mixed mode flag. */
   public static final Boolean DEFAULT_MIXED = Boolean.FALSE;
-  private Boolean m_isMixed = DEFAULT_MIXED;
 
   public static final Boolean DEFAULT_SKIP_FAILED_INVOCATION_COUNTS = Boolean.FALSE;
   private Boolean m_skipFailedInvocationCounts = DEFAULT_SKIP_FAILED_INVOCATION_COUNTS;
@@ -188,14 +179,25 @@ public class XmlSuite implements Serializable, Cloneable {
 
   private List<String> m_listeners = Lists.newArrayList();
 
-  private static final long serialVersionUID = 4999962288272750226L;
-
   public static final Boolean DEFAULT_PRESERVE_ORDER = Boolean.TRUE;
   private Boolean m_preserveOrder = DEFAULT_PRESERVE_ORDER;
 
   private List<String> m_includedGroups = Lists.newArrayList();
   private List<String> m_excludedGroups = Lists.newArrayList();
   private XmlMethodSelectors m_xmlMethodSelectors;
+  private boolean parsed = false;
+
+  public void setParsed(boolean parsed) {
+    this.parsed = parsed;
+  }
+
+  /**
+   *
+   * @return - <code>true</code> if the current {@link XmlSuite} has already been parsed.
+   */
+  public boolean isParsed() {
+    return parsed;
+  }
 
   /**
    * @return the fileName
@@ -513,116 +515,15 @@ public class XmlSuite implements Serializable, Cloneable {
    * @return A String representation of this XML suite.
    */
   public String toXml() {
-    XMLStringBuffer xsb = new XMLStringBuffer();
-    xsb.setDocType("suite SYSTEM \"" + Parser.TESTNG_DTD_URL + '\"');
-    Properties p = new Properties();
-    p.setProperty("name", getName());
-    if (getVerbose() != null) {
-      XmlUtils.setProperty(p, "verbose", getVerbose().toString(), DEFAULT_VERBOSE.toString());
-    }
-    final ParallelMode parallel= getParallel();
-    if(parallel != null && !DEFAULT_PARALLEL.equals(parallel)) {
-      p.setProperty("parallel", parallel.toString());
-    }
-    XmlUtils.setProperty(p, "group-by-instances", String.valueOf(getGroupByInstances()),
-        DEFAULT_GROUP_BY_INSTANCES.toString());
-    XmlUtils.setProperty(p, "configfailurepolicy", getConfigFailurePolicy().toString(),
-        DEFAULT_CONFIG_FAILURE_POLICY.toString());
-    XmlUtils.setProperty(p, "thread-count", String.valueOf(getThreadCount()),
-        DEFAULT_THREAD_COUNT.toString());
-    XmlUtils.setProperty(p, "data-provider-thread-count", String.valueOf(getDataProviderThreadCount()),
-        DEFAULT_DATA_PROVIDER_THREAD_COUNT.toString());
-    if (! DEFAULT_JUNIT.equals(m_isJUnit)) {
-      p.setProperty("junit", m_isJUnit != null ? m_isJUnit.toString() : "false"); // TESTNG-141
-    }
-    XmlUtils.setProperty(p, "skipfailedinvocationcounts", m_skipFailedInvocationCounts.toString(),
-        DEFAULT_SKIP_FAILED_INVOCATION_COUNTS.toString());
-    if(null != m_objectFactory) {
-      p.setProperty("object-factory", m_objectFactory.getClass().getName());
-    }
-    if (isStringNotEmpty(m_parentModule)) {
-      p.setProperty("parent-module", getParentModule());
-    }
-    if (isStringNotEmpty(m_guiceStage)) {
-      p.setProperty("guice-stage", getGuiceStage());
-    }
-    XmlUtils.setProperty(p, "allow-return-values", String.valueOf(getAllowReturnValues()),
-        DEFAULT_ALLOW_RETURN_VALUES.toString());
-    xsb.push("suite", p);
+    return XmlWeaver.asXml(this);
+  }
 
-    XmlUtils.dumpParameters(xsb, m_parameters);
-
-    if (hasElements(m_listeners)) {
-      xsb.push("listeners");
-      for (String listenerName: m_listeners) {
-        Properties listenerProps = new Properties();
-        listenerProps.setProperty("class-name", listenerName);
-        xsb.addEmptyElement("listener", listenerProps);
-      }
-      xsb.pop("listeners");
-    }
-
-    if (hasElements(getXmlPackages())) {
-      xsb.push("packages");
-
-      for (XmlPackage pack : getXmlPackages()) {
-        xsb.getStringBuffer().append(pack.toXml("    "));
-      }
-
-      xsb.pop("packages");
-    }
-
-    if (getXmlMethodSelectors() != null) {
-      xsb.getStringBuffer().append(getXmlMethodSelectors().toXml("  "));
-    } else {
-      // deprecated
-      if (hasElements(getMethodSelectors())) {
-        xsb.push("method-selectors");
-        for (XmlMethodSelector selector : getMethodSelectors()) {
-          xsb.getStringBuffer().append(selector.toXml("  "));
-        }
-
-        xsb.pop("method-selectors");
-      }
-    }
-
-    List<String> suiteFiles = getSuiteFiles();
-    if (suiteFiles.size() > 0) {
-      xsb.push("suite-files");
-      for (String sf : suiteFiles) {
-        Properties prop = new Properties();
-        prop.setProperty("path", sf);
-        xsb.addEmptyElement("suite-file", prop);
-      }
-      xsb.pop("suite-files");
-    }
-
-    List<String> included = getIncludedGroups();
-    List<String> excluded = getExcludedGroups();
-    if (hasElements(included) || hasElements(excluded)) {
-      xsb.push("groups");
-      xsb.push("run");
-      for (String g : included) {
-        xsb.addEmptyElement("include", "name", g);
-      }
-      for (String g : excluded) {
-        xsb.addEmptyElement("exclude", "name", g);
-      }
-      xsb.pop("run");
-      xsb.pop("groups");
-    }
-
-    if (m_xmlGroups != null) {
-      xsb.getStringBuffer().append(m_xmlGroups.toXml("  "));
-    }
-
-    for (XmlTest test : getTests()) {
-      xsb.getStringBuffer().append(test.toXml("  "));
-    }
-
-    xsb.pop("suite");
-
-    return xsb.toXML();
+  /**
+   *
+   * @return - The list of listener names that are local to the current &lt;suite&gt;
+   */
+  public List<String> getLocalListeners() {
+    return m_listeners;
   }
 
   @Tag(name = "method-selectors")
@@ -630,7 +531,7 @@ public class XmlSuite implements Serializable, Cloneable {
     m_xmlMethodSelectors = xms;
   }
 
-  private XmlMethodSelectors getXmlMethodSelectors() {
+  public XmlMethodSelectors getXmlMethodSelectors() {
     return m_xmlMethodSelectors;
   }
 
@@ -639,27 +540,19 @@ public class XmlSuite implements Serializable, Cloneable {
    */
   @Override
   public String toString() {
-    StringBuffer result = new StringBuffer("[Suite: \"").append( m_name).append( "\" ");
+    StringBuilder result = new StringBuilder("[Suite: \"").append( m_name).append( "\" ");
 
     for (XmlTest t : m_tests) {
       result.append("  ").append( t.toString()).append(' ');
     }
 
     for (XmlMethodSelector ms : m_methodSelectors) {
-      result.append(" methodSelector:" + ms);
+      result.append(" methodSelector:").append(ms);
     }
 
     result.append(']');
 
     return result.toString();
-  }
-
-  /**
-   * Logs to System.out.
-   * @param s the message to log.
-   */
-  private static void ppp(String s) {
-    System.out.println("[XmlSuite] " + s);
   }
 
   /**
@@ -699,7 +592,7 @@ public class XmlSuite implements Serializable, Cloneable {
     result.setConfigFailurePolicy(getConfigFailurePolicy());
     result.setThreadCount(getThreadCount());
     result.setDataProviderThreadCount(getDataProviderThreadCount());
-    result.setParameters(getAllParameters());
+    result.setParameters(getParameters());
     result.setVerbose(getVerbose());
     result.setXmlPackages(getXmlPackages());
 //    result.setBeanShellExpression(getExpression());
@@ -784,12 +677,10 @@ public class XmlSuite implements Serializable, Cloneable {
   }
 
   public int getDataProviderThreadCount() {
-    // org.testng.CommandLineArgs.DATA_PROVIDER_THREAD_COUNT
     String s = System.getProperty("dataproviderthreadcount");
     if (s != null) {
       try {
-        int nthreads = Integer.parseInt(s);
-        return nthreads;
+        return Integer.parseInt(s);
       } catch(NumberFormatException nfe) {
         System.err.println("Parsing System property 'dataproviderthreadcount': " + nfe);
       }
@@ -814,8 +705,6 @@ public class XmlSuite implements Serializable, Cloneable {
   public int hashCode() {
     final int prime = 31;
     int result = 1;
-//      result = prime * result
-//          + ((m_childSuites == null) ? 0 : m_childSuites.hashCode());
     result = prime
         * result
         + ((m_configFailurePolicy == null) ? 0 : m_configFailurePolicy
@@ -995,23 +884,6 @@ public class XmlSuite implements Serializable, Cloneable {
     return true;
   }
 
-
-  /**
-   * The DTD sometimes forces certain attributes to receive a default value. Such
-   * a value is considered equal to another one if that other one is null.
-   */
-  private boolean eq(String o1, String o2, String def) {
-    boolean result = false;
-    if (o1 == null && o2 == null) result = true;
-    else if (o1 != null) {
-      result = o1.equals(o2) || (def.equals(o1) && o2 == null);
-    }
-    else if (o2 != null) {
-      result = o2.equals(o1) || (def.equals(o2) && o1 == null);
-    }
-    return result;
-  }
-
   /**
    * @deprecated Use {@link #setPreserveOrder(Boolean)} instead
    */
@@ -1048,7 +920,7 @@ public class XmlSuite implements Serializable, Cloneable {
   }
 
   /**
-   * @param g
+   * @param g - The list of groups to include.
    */
   public void setIncludedGroups(List<String> g) {
     m_includedGroups = g;

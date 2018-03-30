@@ -1,6 +1,6 @@
 <!DOCTYPE suite SYSTEM "http://testng.org/testng-1.0.dtd" >
 
-<suite name="TestNG" verbose="1" parallel="none" thread-count="2"
+<suite name="TestNG" verbose="1" parallel="false" thread-count="2"
     data-provider-thread-count="3">
 
   <suite-files>
@@ -22,6 +22,23 @@
       <class name="NoPackageTest" />
     </classes>
   </test>
+
+  <test name="1336_Tests_With_Priority" parallel="classes" thread-count="10">
+    <classes>
+      <class name="test.github1336.TestNG1"/>
+      <class name="test.github1336.TestNG2"/>
+      <class name="test.github1336.TestNG3"/>
+    </classes>
+  </test>
+
+  <test name="1336_Tests_No_Priority" parallel="classes" thread-count="10">
+    <classes>
+      <class name="test.github1336.TestNG1NoPriority"/>
+      <class name="test.github1336.TestNG2NoPriority"/>
+      <class name="test.github1336.TestNG3NoPriority"/>
+    </classes>
+  </test>
+
 
   <parameter name="first-name" value="Cedric" />
 
@@ -61,7 +78,12 @@
       <class name="test.MethodTest" />
       <class name="test.sample.AfterClassCalledAtEnd"/>
       <class name="test.GraphTest"/>
-      <class name="test.DynamicGraphTest"/>
+      <class name="org.testng.internal.DynamicGraphTest"/>
+      <class name="org.testng.internal.ParameterHandlerTest"/>
+      <class name="org.testng.internal.TestListenerHelperTest"/>
+      <class name="org.testng.internal.GroupsHelperTest"/>
+      <class name="org.testng.internal.DynamicGraphHelperTest"/>
+      <class name="test.ReflectionHelperTest"/>
       <class name="test.privatemethod.PrivateMethodTest$PrivateMethodInnerTest"/>
       <class name="test.multiple.TestMultiple"/>
       <class name="test.ClassConfigurations"/>
@@ -78,20 +100,26 @@
       <class name="test.thread.DataProviderThreadPoolSizeTest" />
       <class name="test.thread.MultiThreadedDependentTest" />
       <class name="test.thread.TrueParallelTest" />
+      <class name="test.github765.ExcludeSyntheticMethodsFromTemplateCallsTest"/>
+      <class name="test.github1405.TestExclusionOfMainMethod"/>
+      <class name="test.cli.github1517.ExitCodeListenerBehaviorTest"/>
 <!--
       <class name="test.thread.ParallelSuiteTest"/>
 -->
       <class name="test.simple.IncludedExcludedTest" />
       <class name="test.reports.ReportTest" />
+      <class name="test.reports.XmlReporterTest"/>
       <class name="test.annotationtransformer.AnnotationTransformerTest" />
 <!--
       <class name="test.jar.JarTest" />
  -->
       <class name="test.xml.XmlVerifyTest" />
+      <class name="test.xml.XMLStringBufferTest"/>
       <class name="test.invokedmethodlistener.InvokedMethodListenerTest" />
       <class name="test.testng249.VerifyTest"/>
       <class name="test.testng195.AfterMethodTest" />
       <class name="test.regression.BeforeTestFailingTest"/>
+      <class name="test.configuration.github1700.RunTest"/>
       <class name="test.testng285.TestNG285Test" />
       <class name="test.failedreporter.FailedReporterTest" />
       <class name="test.attributes.AttributeTest"/>
@@ -120,7 +148,10 @@
       <class name="test.groupbug.GroupBugTest" />
       <class name="test.parameters.ShadowTest" />
       <class name="test.parameters.ParameterOverrideTest" />
+      <class name="test.parameters.ParameterInjectAndOptionTest" />
+      <class name="test.parameters.ParametersPackageLevelMethodTest" />
       <class name="test.reports.FailedReporterTest" />
+      <class name="test.reports.EmailableReporterTest"/>
       <class name="test.failedreporter.FailedReporterScenariosTest"/>
       <class name="test.failedreporter.FailedReporterParametersTest"/>
       <class name="test.reports.ReporterLogTest" />
@@ -128,6 +159,24 @@
       <class name="test.testng1231.TestExecutionListenerInvocationOrder"/>
       <class name="test.testng1232.TestListenerInstances"/>
       <class name="test.testng674.BeforeClassSkipExceptionTest"/>
+      <class name="test.testng106.TestNG106"/>
+      <class name="test.issue107.Issue107Test"/>
+      <class name="test.test111.Test1" />
+      <class name="test.testng173.TestNG173Test" />
+      <class name="test.listeners.github551.Test551"/>
+      <class name="test.listeners.github1284.TestListeners"/>
+      <class name="test.listeners.github1735.ExecutionListenerTest"/>
+      <class name="test_result.GitHub1197Test"/>
+      <class name="test.listeners.github1319.TestResultInstanceCheckTest"/>
+      <class name="test.testng1396.ParallelByInstancesInterceptorTest"/>
+      <class name="test.github1417.TestParamsInjectionInBeforeClass"/>
+      <class name="test.order.OrderTest" />
+      <class name="test.github1461.MemoryLeakTestNg" />
+      <!-- TODO fix the random issue <class name="test.issue565.Issue565Test"/>-->
+      <class name="test.factory.github328.GitHub328Test" />
+      <class name="test.github1490.VerifyDataProviderListener"/>      
+      <class name="test.methodselection.MethodSelectionTest"/>
+      <class name="test.beforegroups.BeforeGroupsTest"/>
     </classes>
   </test>
 
@@ -153,9 +202,12 @@
       <class name="test.listeners.SuiteAndConfigurationListenerTest" />
       <class name="test.listeners.ListenerInXmlTest" />
       <class name="test.listeners.ExecutionListenerTest" />
+      <class name="test.listeners.ExecutionListenerAndSuiteListenerTest" />
       <class name="test.listeners.ConfigurationListenerTest" />
       <class name="test.multiplelisteners.TestMaker" />
       <class name="test.listeners.github1130.GitHub1130Test"/>
+      <class name="test.listeners.github1296.GitHub1296Test"/>
+      <class name="test.listeners.github1465.IssueTest"/>
     </classes>
   </test>
 
@@ -174,6 +226,8 @@
       <class name="test.inject.InjectDataProviderTest"/>
       <class name="test.inject.NoInjectionTest" />
       <class name="test.inject.NativeInjectionTest" />
+      <class name="test.inject.Github1298Test"/>
+      <class name="test.inject.Github1649Test"/>
     </classes>
   </test>
 
@@ -229,6 +283,7 @@
       <class name="test.dependent.GroupByInstancesTest" />
       <class name="test.dependent.xml.GroupDependencyTest" />
       <class name="test.dependent.DependencyFixTest"/>
+      <class name="test.dependent.issue1648.TestRunner"/>
     </classes>
   </test>
 
@@ -239,6 +294,8 @@
       <class name="test.inheritance.testng739.TestNG739"/>
       <class name="test.inheritance.testng234.PolymorphicFailureTest" />
       <class name="test.inheritance.testng471.TestNG471" />
+      <class name="test.inheritance.github980.Github980Test"/>
+      <class name="test.inheritance.github949.Github949Test"/>
     </classes>
   </test>
 
@@ -327,6 +384,7 @@
       <class name="test.factory.classconf.XClassOrderWithFactoryTest" />
       <class name="test.factory.FactoryInterleavingTest"/>
       <class name="test.factory.FactoryDataProviderTest"/>
+      <class name="test.factory.github1631.GitHub1631Tests"/>
 
       <class name="test.factory.DisabledFactoryTest"/>
       <class name="test.factory.FactoryAndTestMethodTest" />
@@ -335,6 +393,7 @@
       <class name="test.factory.EmptyFactoryDataProviderTest" />
 
       <class name="test.factory.github1131.GitHub1131Test" />
+      <class name="test.factory.nested.GitHub1307Test"/>
     </classes>
   </test>
 
@@ -477,6 +536,7 @@
     <classes>
       <class name="test.methodselectors.MethodSelectorTest" />
       <class name="test.methodselectors.BeanShellTest" />
+      <class name="test.methodselectors.BeanShellNegativeTest" />
       <class name="test.methodselectors.CommandLineTest" />
       <class name="test.methodselectors.MethodSelectorInSuiteTest" />
     </classes>
@@ -496,12 +556,6 @@
       <class name="test.dataprovider.FailingIterableDataProviderTest" />
       <class name="test.dataprovider.IndicesTest" />
       <class name="test.dataprovider.DataProviderTest"/>
-    </classes>
-  </test>
-
-  <test name="bug111">
-    <classes>
-      <class name="test.test111.Test1" />
     </classes>
   </test>
 
@@ -579,6 +633,7 @@
       <class name="test.JUnitTest1" />
       <class name="test.CommandLineTest"/>
       <class name="test.JUnit4Test" />
+      <class name="test.junit4.listeners.Issue323TestRunner"/>
       <class name="test.groovy.GroovyTest" />
     </classes>
   </test>
@@ -643,6 +698,7 @@
       <class name="test.methodinterceptors.MethodInterceptorTest" />
       <class name="test.methodinterceptors.Issue392Test" />
       <class name="test.methodinterceptors.multipleinterceptors.MultipleInterceptorsTest" />
+      <class name="test.methodinterceptors.issue1726.CustomInterceptorTest"/>
     </classes>
   </test>
 
@@ -657,6 +713,8 @@
   <test name="Utils">
     <classes>
       <class name="org.testng.internal.UtilsTest" />
+      <class name="org.testng.internal.ClassHelperTest"/>
+      <class name="test.issue1430.TestFileToClass"/>
     </classes>
   </test>
 
@@ -702,6 +760,9 @@
     <classes>
       <class name="org.testng.xml.SuiteXmlParserTest" />
       <class name="org.testng.xml.XmlSuiteTest"/>
+      <class name="org.testng.xml.internal.XmlSuiteUtilsTest"/>
+      <class name="org.testng.xml.XmlTestTest"/>
+      <class name="org.testng.xml.ParserTest"/>
     </classes>
   </test>
 
@@ -709,6 +770,12 @@
     <classes>
       <class name="test.sanitycheck.CheckTestNamesTest" />
       <class name="test.sanitycheck.CheckSuiteNamesTest" />
+    </classes>
+  </test>
+  
+  <test name="TestNames">
+    <classes>
+      <class name="org.testng.xml.internal.TestNamesMatcherTest"/>
     </classes>
   </test>
 
@@ -728,12 +795,7 @@
       <class name="test.configuration.VerifySuiteTest" />
       <class name="test.configuration.SingleConfigurationTest" />
       <class name="test.configuration.BeforeClassWithDisabledTest" />
-    </classes>
-  </test>
-
-  <test name="Bug173">
-    <classes>
-      <class name="test.testng173.TestNG173Test" />
+      <class name="test.configuration.github1625.TestRunnerIssue1625"/>
     </classes>
   </test>
 
@@ -751,7 +813,6 @@
 
   <test name="Issue 107">
     <classes>
-      <class name="test.issue107.Issue107Test"/>
     </classes>
   </test>
 
@@ -762,15 +823,10 @@
     </classes>
   </test>
 
-  <test name="TESTNG-106">
-    <classes>
-      <class name="test.testng106.TestNG106"/>
-    </classes>
-  </test>
-
   <test name="@Test(enable)">
     <classes>
       <class name="test.enable.EnableTest"/>
+      <class name="test.ignore.IgnoreTest"/>
     </classes>
   </test>
 
@@ -790,6 +846,44 @@
       <class name="test.thread.parallelization.ParallelByMethodsTestCase3Scenario1"/>
       <class name="test.thread.parallelization.ParallelByMethodsTestCase3Scenario2"/>
       <class name="test.thread.parallelization.ParallelByMethodsTestCase4Scenario1"/>
+      <class name="test.thread.parallelization.ParallelByMethodsTestCase5Scenario1"/>
+      <class name="test.thread.parallelization.ParallelByMethodsTestCase5Scenario2"/>
+      <class name="test.thread.parallelization.ParallelByMethodsTestCase6Scenario1"/>
+      <class name="test.thread.parallelization.ParallelByMethodsTestCase7Scenario1"/>
+      <class name="test.thread.parallelization.ParallelByMethodsTestCase7Scenario2"/>
+      <class name="test.thread.parallelization.ParallelByMethodsTestCase8Scenario1"/>
+    </classes>
+  </test>
+
+  <test name="Suite_Related_Tests">
+    <classes>
+      <class name="test.suites.github1533.Github1533Test"/>
+    </classes>
+  </test>
+
+  <test name="Jar_Related_tests">
+    <classes>
+      <class name="org.testng.JarFileUtilsTest"/>
+    </classes>
+  </test>
+
+  <!--This test depends on System properties. So its intentionally being run at the end
+  because the toggling of the system property will affect other tests -->
+  <test name = "RunAtLast">
+    <classes>
+      <class name="test.dataprovider.issue128.DataProviderParametersMismatchTest"/>
+    </classes>
+  </test>
+
+  <test name = "dryRun">
+    <classes>
+      <class name="org.testng.DryRunTest"/>
+    </classes>
+  </test>
+
+  <test name="RunOrderingTest">
+    <classes>
+      <class name="test.github799.EnsureInstancesAreOrderedViaFactories"/>
     </classes>
   </test>
 

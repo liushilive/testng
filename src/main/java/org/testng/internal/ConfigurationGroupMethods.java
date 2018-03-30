@@ -5,26 +5,27 @@ import org.testng.ITestNGMethod;
 import org.testng.collections.Lists;
 import org.testng.collections.Maps;
 
-import java.io.Serializable;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * This class wraps access to beforeGroups and afterGroups methods,
  * since they are passed around the various invokers and potentially
  * modified in different threads.
  *
- * @author <a href="mailto:cedric@beust.com">Cedric Beust</a>
- * @author <a href='mailto:the_mindstorm@evolva.ro'>Alexandru Popescu</a>
  * @since 5.3 (Mar 2, 2006)
  */
-public class ConfigurationGroupMethods implements Serializable {
-  /** Use serialVersionUID for interoperability. */
-  private final static long serialVersionUID= 1660798519864898480L;
+public class ConfigurationGroupMethods {
 
   /** The list of beforeGroups methods keyed by the name of the group */
   private final Map<String, List<ITestNGMethod>> m_beforeGroupsMethods;
+
+  private final Set<String> beforeGroupsThatHaveAlreadyRun = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+  private final Set<String> afterGroupsThatHaveAlreadyRun = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
 
   /** The list of afterGroups methods keyed by the name of the group */
   private final Map<String, List<ITestNGMethod>> m_afterGroupsMethods;
@@ -33,15 +34,19 @@ public class ConfigurationGroupMethods implements Serializable {
   private final ITestNGMethod[] m_allMethods;
 
   /**A map that returns the last method belonging to the given group */
-  private Map<String, List<ITestNGMethod>> m_afterGroupsMap= null;
+  private volatile Map<String, List<ITestNGMethod>> m_afterGroupsMap = null;
 
   public ConfigurationGroupMethods(ITestNGMethod[] allMethods,
                                    Map<String, List<ITestNGMethod>> beforeGroupsMethods,
                                    Map<String, List<ITestNGMethod>> afterGroupsMethods)
   {
-    m_allMethods= allMethods;
-    m_beforeGroupsMethods= beforeGroupsMethods;
-    m_afterGroupsMethods= afterGroupsMethods;
+    m_allMethods = allMethods;
+    m_beforeGroupsMethods = new ConcurrentHashMap<>(beforeGroupsMethods);
+    m_afterGroupsMethods = new ConcurrentHashMap<>(afterGroupsMethods);
+  }
+
+  public ITestNGMethod[] getAllTestMethods() {
+    return this.m_allMethods;
   }
 
   public Map<String, List<ITestNGMethod>> getBeforeGroupsMethods() {
@@ -57,33 +62,36 @@ public class ConfigurationGroupMethods implements Serializable {
    * This method is used to figure out when is the right time to invoke
    * afterGroups methods.
    */
-  public synchronized boolean isLastMethodForGroup(String group, ITestNGMethod method) {
+  public boolean isLastMethodForGroup(String group, ITestNGMethod method) {
 
     // If we have more invocation to do, this is not the last one yet
     if(method.hasMoreInvocation()) {
       return false;
     }
 
-    // Lazy initialization since we might never be called
-    if(m_afterGroupsMap == null) {
-      m_afterGroupsMap= initializeAfterGroupsMap();
+    //This Mutex ensures that this edit check runs sequentially for one ITestNGMethod
+    //method at a time because this object is being shared between all the ITestNGMethod objects.
+    synchronized (this) {
+      if (m_afterGroupsMap == null) {
+        m_afterGroupsMap = initializeAfterGroupsMap();
+      }
+
+      List<ITestNGMethod> methodsInGroup = m_afterGroupsMap.get(group);
+
+      if (null == methodsInGroup || methodsInGroup.isEmpty()) {
+        return false;
+      }
+
+      methodsInGroup.remove(method);
+
+      // Note:  == is not good enough here as we may work with ITestNGMethod clones
+      return methodsInGroup.isEmpty();
     }
-
-    List<ITestNGMethod> methodsInGroup= m_afterGroupsMap.get(group);
-
-    if(null == methodsInGroup || methodsInGroup.isEmpty()) {
-      return false;
-    }
-
-    methodsInGroup.remove(method);
-
-    // Note:  == is not good enough here as we may work with ITestNGMethod clones
-    return methodsInGroup.isEmpty();
 
   }
 
-  private synchronized Map<String, List<ITestNGMethod>> initializeAfterGroupsMap() {
-    Map<String, List<ITestNGMethod>> result= Maps.newHashMap();
+  private Map<String, List<ITestNGMethod>> initializeAfterGroupsMap() {
+    Map<String, List<ITestNGMethod>> result= Maps.newConcurrentMap();
     for(ITestNGMethod m : m_allMethods) {
       String[] groups= m.getGroups();
       for(String g : groups) {
@@ -96,14 +104,18 @@ public class ConfigurationGroupMethods implements Serializable {
       }
     }
 
+    synchronized (afterGroupsThatHaveAlreadyRun) {
+      afterGroupsThatHaveAlreadyRun.clear();
+    }
+
     return result;
   }
 
-  public synchronized void removeBeforeMethod(String group, ITestNGMethod method) {
+  public void removeBeforeMethod(String group, ITestNGMethod method) {
     List<ITestNGMethod> methods= m_beforeGroupsMethods.get(group);
     if(methods != null) {
-      Object success= methods.remove(method);
-      if(success == null) {
+      boolean success= methods.remove(method);
+      if(!success) {
         log("Couldn't remove beforeGroups method " + method + " for group " + group);
       }
     }
@@ -116,27 +128,36 @@ public class ConfigurationGroupMethods implements Serializable {
     Utils.log("ConfigurationGroupMethods", 2, string);
   }
 
-  synchronized public Map<String, List<ITestNGMethod>> getBeforeGroupsMap() {
-    return m_beforeGroupsMethods;
+  public List<ITestNGMethod> getBeforeGroupMethodsForGroup(String group) {
+    synchronized (beforeGroupsThatHaveAlreadyRun) {
+      return retrieve(beforeGroupsThatHaveAlreadyRun, m_beforeGroupsMethods, group);
+    }
   }
 
-  synchronized public Map<String, List<ITestNGMethod>> getAfterGroupsMap() {
-    return m_afterGroupsMethods;
+  public List<ITestNGMethod> getAfterGroupMethodsForGroup(String group) {
+    synchronized (afterGroupsThatHaveAlreadyRun) {
+      return retrieve(afterGroupsThatHaveAlreadyRun, m_afterGroupsMethods, group);
+    }
   }
 
-  synchronized public void removeBeforeGroups(String[] groups) {
+  public void removeBeforeGroups(String[] groups) {
     for(String group : groups) {
-//      log("Removing before group " + group);
       m_beforeGroupsMethods.remove(group);
     }
   }
 
-  synchronized public void removeAfterGroups(Collection<String> groups) {
+  public void removeAfterGroups(Collection<String> groups) {
     for(String group : groups) {
-//      log("Removing before group " + group);
       m_afterGroupsMethods.remove(group);
     }
+  }
 
+  private static List<ITestNGMethod> retrieve(Set<String> tracker, Map<String, List<ITestNGMethod>> map, String group) {
+    if (tracker.contains(group)) {
+      return Collections.EMPTY_LIST;
+    }
+    tracker.add(group);
+    return map.get(group);
   }
 
 }

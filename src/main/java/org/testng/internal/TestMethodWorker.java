@@ -8,7 +8,6 @@ import org.testng.ITestContext;
 import org.testng.ITestNGMethod;
 import org.testng.ITestResult;
 import org.testng.collections.Lists;
-import org.testng.internal.thread.ThreadUtil;
 import org.testng.internal.thread.graph.IWorker;
 import org.testng.xml.XmlSuite;
 
@@ -25,15 +24,13 @@ import java.util.Set;
  *
  * This class implements Runnable and will invoke the ITestMethod passed in its
  * constructor on its run() method.
- *
- * @author <a href="mailto:cedric@beust.com">Cedric Beust</a>
- * @author <a href='mailto:the_mindstorm[at]evolva[dot]ro'>Alexandru Popescu</a>
  */
 public class TestMethodWorker implements IWorker<ITestNGMethod> {
+
   // Map of the test methods and their associated instances
   // It has to be a set because the same method can be passed several times
   // and associated to a different instance
-  private IMethodInstance[] m_methodInstances;
+  private List<IMethodInstance> m_methodInstances;
   private final IInvoker m_invoker;
   private final Map<String, String> m_parameters;
   private final XmlSuite m_suite;
@@ -44,7 +41,7 @@ public class TestMethodWorker implements IWorker<ITestNGMethod> {
   private final List<IClassListener> m_listeners;
 
   public TestMethodWorker(IInvoker invoker,
-                          IMethodInstance[] testMethods,
+                          List<IMethodInstance> testMethods,
                           XmlSuite suite,
                           Map<String, String> parameters,
                           ConfigurationGroupMethods groupMethods,
@@ -110,8 +107,7 @@ public class TestMethodWorker implements IWorker<ITestNGMethod> {
       // Invoke test method
       try {
         invokeTestMethods(testMethod, testMthdInst.getInstance(), m_testContext);
-      }
-      finally {
+      } finally {
         invokeAfterClassMethods(testClass, testMthdInst);
       }
     }
@@ -152,27 +148,29 @@ public class TestMethodWorker implements IWorker<ITestNGMethod> {
 
     // the whole invocation must be synchronized as other threads must
     // get a full initialized test object (not the same for @After)
-    Map<ITestClass, Set<Object>> invokedBeforeClassMethods =
-        m_classMethodMap.getInvokedBeforeClassMethods();
-    synchronized(testClass) {
-      Set<Object> instances= invokedBeforeClassMethods.get(testClass);
-      if(null == instances) {
-        instances= new HashSet<>();
+    // Synchronization on local variables is generally considered a bad practice, but this is an exception.
+    // We need to ensure that two threads that are querying for the same "Class" then they
+    // should be mutually exclusive. In all other cases, parallelism can be allowed.
+    //DO NOT REMOVE THIS SYNC LOCK.
+    synchronized (testClass) {
+      Map<ITestClass, Set<Object>> invokedBeforeClassMethods = m_classMethodMap.getInvokedBeforeClassMethods();
+      Set<Object> instances = invokedBeforeClassMethods.get(testClass);
+      if (null == instances) {
+        instances = new HashSet<>();
         invokedBeforeClassMethods.put(testClass, instances);
       }
-      for(Object instance: mi.getInstances()) {
-        if (! instances.contains(instance)) {
-          instances.add(instance);
-          for (IClassListener listener : m_listeners) {
-            listener.onBeforeClass(testClass);
-          }
-          m_invoker.invokeConfigurations(testClass,
-                                         testClass.getBeforeClassMethods(),
-                                         m_suite,
-                                         m_parameters,
-                                         null, /* no parameter values */
-                                         instance);
+      Object instance = mi.getInstance();
+      if (!instances.contains(instance)) {
+        instances.add(instance);
+        for (IClassListener listener : m_listeners) {
+          listener.onBeforeClass(testClass);
         }
+        m_invoker.invokeConfigurations(testClass,
+                testClass.getBeforeClassMethods(),
+                m_suite,
+                m_parameters,
+                null, /* no parameter values */
+                instance);
       }
     }
   }
@@ -194,33 +192,31 @@ public class TestMethodWorker implements IWorker<ITestNGMethod> {
     //
     List<Object> invokeInstances= Lists.newArrayList();
     ITestNGMethod tm= mi.getMethod();
-    if (m_classMethodMap.removeAndCheckIfLast(tm, mi.getInstance())) {
-      Map<ITestClass, Set<Object>> invokedAfterClassMethods
-          = m_classMethodMap.getInvokedAfterClassMethods();
-      synchronized(invokedAfterClassMethods) {
-        Set<Object> instances = invokedAfterClassMethods.get(testClass);
-        if(null == instances) {
-          instances= new HashSet<>();
-          invokedAfterClassMethods.put(testClass, instances);
-        }
-        for(Object inst: mi.getInstances()) {
-          if(! instances.contains(inst)) {
-            invokeInstances.add(inst);
-          }
-        }
-      }
+    boolean removalSuccessful = m_classMethodMap.removeAndCheckIfLast(tm, mi.getInstance());
+    if (!removalSuccessful) {
+      return;
+    }
+    Map<ITestClass, Set<Object>> invokedAfterClassMethods = m_classMethodMap.getInvokedAfterClassMethods();
+    Set<Object> instances = invokedAfterClassMethods.get(testClass);
+    if (null == instances) {
+      instances = new HashSet<>();
+      invokedAfterClassMethods.put(testClass, instances);
+    }
+    Object inst = mi.getInstance();
+    if (!instances.contains(inst)) {
+      invokeInstances.add(inst);
+    }
 
-      for (IClassListener listener : m_listeners) {
-        listener.onAfterClass(testClass);
-      }
-      for(Object inst: invokeInstances) {
-        m_invoker.invokeConfigurations(testClass,
-                                       testClass.getAfterClassMethods(),
-                                       m_suite,
-                                       m_parameters,
-                                       null, /* no parameter values */
-                                       inst);
-      }
+    for (IClassListener listener : m_listeners) {
+      listener.onAfterClass(testClass);
+    }
+    for (Object invokeInstance : invokeInstances) {
+      m_invoker.invokeConfigurations(testClass,
+              testClass.getAfterClassMethods(),
+              m_suite,
+              m_parameters,
+              null, /* no parameter values */
+              invokeInstance);
     }
   }
 
@@ -235,10 +231,6 @@ public class TestMethodWorker implements IWorker<ITestNGMethod> {
 
   public List<ITestResult> getTestResults() {
     return m_testResults;
-  }
-
-  private void ppp(String s) {
-    Utils.log("TestMethodWorker", 2, ThreadUtil.currentThreadInfo() + ":" + s);
   }
 
   @Override
@@ -261,8 +253,8 @@ public class TestMethodWorker implements IWorker<ITestNGMethod> {
    */
   @Override
   public int getPriority() {
-    return m_methodInstances.length > 0
-        ? m_methodInstances[0].getMethod().getPriority()
+    return m_methodInstances.size() > 0
+        ? m_methodInstances.get(0).getMethod().getPriority()
         : 0;
   }
 }
@@ -277,14 +269,14 @@ class SingleTestMethodWorker extends TestMethodWorker {
         new HashMap<String, List<ITestNGMethod>>(), new HashMap<String, List<ITestNGMethod>>());
 
   public SingleTestMethodWorker(IInvoker invoker,
-                                MethodInstance testMethod,
+                                IMethodInstance testMethod,
                                 XmlSuite suite,
                                 Map<String, String> parameters,
                                 ITestContext testContext,
                                 List<IClassListener> listeners)
   {
     super(invoker,
-          new MethodInstance[] {testMethod},
+            asList(testMethod),
           suite,
           parameters,
           EMPTY_GROUP_METHODS,
@@ -292,4 +284,12 @@ class SingleTestMethodWorker extends TestMethodWorker {
           testContext,
           listeners);
   }
+
+  //TODO Resorted to introducing this method to keep JDK7 happy. Can be removed once we move to JDK8
+  private static List<IMethodInstance> asList(IMethodInstance testMethod) {
+    List<IMethodInstance> methods = Lists.newLinkedList();
+    methods.add(testMethod);
+    return methods;
+  }
+
 }

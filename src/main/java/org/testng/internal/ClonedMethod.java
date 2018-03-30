@@ -14,10 +14,9 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 
 public class ClonedMethod implements ITestNGMethod {
-  private static final long serialVersionUID = 1L;
 
-  private ITestNGMethod m_method;
-  transient private Method m_javaMethod;
+  private final ITestNGMethod m_method;
+  private final Method m_javaMethod;
   private String m_id;
   private int m_currentInvocationCount;
   private long m_date;
@@ -96,11 +95,6 @@ public class ClonedMethod implements ITestNGMethod {
   }
 
   @Override
-  public Object[] getInstances() {
-    return m_method.getInstances();
-  }
-
-  @Override
   public Object getInstance() {
     return m_method.getInstance();
   }
@@ -111,18 +105,8 @@ public class ClonedMethod implements ITestNGMethod {
   }
 
   @Override
-  public int getTotalInvocationCount() {
-    return 1;
-  }
-
-  @Override
   public long getInvocationTimeOut() {
     return m_method.getInvocationTimeOut();
-  }
-
-  @Override
-  public Method getMethod() {
-    return m_javaMethod;
   }
 
   @Override
@@ -306,22 +290,6 @@ public class ClonedMethod implements ITestNGMethod {
   }
 
   @Override
-  public int compareTo(Object o) {
-    int result = -2;
-    Class<?> thisClass = getRealClass();
-    Class<?> otherClass = ((ITestNGMethod) o).getRealClass();
-    if (thisClass.isAssignableFrom(otherClass)) {
-      result = -1;
-    } else if (otherClass.isAssignableFrom(thisClass)) {
-      result = 1;
-    } else if (equals(o)) {
-      result = 0;
-    }
-
-    return result;
-  }
-
-  @Override
   public ClonedMethod clone() {
     return new ClonedMethod(m_method, m_javaMethod);
   }
@@ -330,7 +298,7 @@ public class ClonedMethod implements ITestNGMethod {
   public String toString() {
     ConstructorOrMethod m = getConstructorOrMethod();
     String cls = m.getDeclaringClass().getName();
-    StringBuffer result = new StringBuffer(cls + "." + m.getName() + "(");
+    StringBuilder result = new StringBuilder(cls).append(".").append( m.getName()).append("(");
     int i = 0;
     for (Class<?> p : m.getParameterTypes()) {
       if (i++ > 0) {

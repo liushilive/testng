@@ -1,5 +1,7 @@
 package org.testng.internal;
 
+import org.testng.IDataProviderMethod;
+
 import java.util.Iterator;
 
 /**
@@ -14,14 +16,15 @@ public class ParameterHolder {
    */
   public enum ParameterOrigin {
     ORIGIN_DATA_PROVIDER, // A data provider
-    ORIGIN_XML // TestNG XML suite
+    ORIGIN_XML, // TestNG XML suite
+    NATIVE //Native injection is involved.
   }
 
-  public DataProviderHolder dataProviderHolder;
+  public IDataProviderMethod dataProviderHolder;
   public Iterator<Object[]> parameters;
   public ParameterOrigin origin;
 
-  public ParameterHolder(Iterator<Object[]> parameters, ParameterOrigin origin, DataProviderHolder dph) {
+  public ParameterHolder(Iterator<Object[]> parameters, ParameterOrigin origin, IDataProviderMethod dph) {
     super();
     this.parameters = parameters;
     this.origin = origin;

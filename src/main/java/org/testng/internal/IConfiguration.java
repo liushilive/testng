@@ -19,10 +19,12 @@ public interface IConfiguration {
   void setConfigurable(IConfigurable c);
 
   List<IExecutionListener> getExecutionListeners();
-  void addExecutionListener(IExecutionListener l);
+  default void addExecutionListener(IExecutionListener l) {}
+
+  default boolean addExecutionListenerIfAbsent(IExecutionListener l) {
+    return false;
+  }
 
   List<IConfigurationListener> getConfigurationListeners();
   void addConfigurationListener(IConfigurationListener cl);
-
-  List<IAlterSuiteListener> getAlterSuiteListeners();
 }

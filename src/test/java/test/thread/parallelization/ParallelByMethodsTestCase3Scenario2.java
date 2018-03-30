@@ -17,6 +17,8 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import static org.testng.Assert.assertEquals;
 
@@ -123,19 +125,39 @@ public class ParallelByMethodsTestCase3Scenario2 extends BaseParallelizationTest
                 TestClassFSixMethodsWithDataProviderOnSomeMethodsAndNoDepsSample.class);
 
         suiteOne.setParallel(XmlSuite.ParallelMode.METHODS);
-
         suiteOne.setThreadCount(3);
+
         suiteTwo.setParallel(XmlSuite.ParallelMode.METHODS);
         suiteTwo.setThreadCount(4);
 
 
-        addParams(suiteOne, SUITE_A, SUITE_A_TEST_A, "1", "paramOne,paramTwo,paramThree");
+        addParams(suiteOne, SUITE_A, SUITE_A_TEST_A, "100", "paramOne,paramTwo,paramThree");
 
-        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_A, "1", "paramOne,paramTwo");
-        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_B, "1", "paramOne,paramTwo");
+        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_A, "100", "paramOne,paramTwo");
+        addParams(suiteTwo, SUITE_B, SUITE_B_TEST_B, "100", "paramOne,paramTwo");
 
         TestNG tng = create(suiteOne, suiteTwo);
         tng.addListener((ITestNGListener) new TestNgRunStateListener());
+
+        System.out.println("Beginning ParallelByMethodsTestCase3Scenario2. This test scenario consists of two " +
+                "suites with 1 and 2 tests respectively. One test for a suite shall consist of a single test class " +
+                "while the rest shall consist of more than one test class. Each test class has some methods with use " +
+                "a data provider and some which do not. Two data providers are used: one which provides two sets of " +
+                "data, one which provide three sets of data. There are no dependencies or factories.");
+
+        System.out.println("Suite: " + SUITE_A + ", Test: " + SUITE_A_TEST_A + ", Test classes: " +
+                TestClassAFiveMethodsWithDataProviderOnSomeMethodsAndNoDepsSample.class.getCanonicalName() + ", " +
+                TestClassBSixMethodsWithDataProviderOnSomeMethodsAndNoDepsSample.class.getCanonicalName() +
+                ". Thread count: 3");
+
+        System.out.println("Suite: " + SUITE_B + ", Test: " + SUITE_B_TEST_A + ", Test class: " +
+                TestClassCFiveMethodsWithDataProviderOnSomeMethodsAndNoDepsSample.class.getCanonicalName() +
+                ". Thread count: 4");
+
+        System.out.println("Suite: " + SUITE_B + ", Test: " + SUITE_B_TEST_B + ", Test classes: " +
+                TestClassDThreeMethodsWithDataProviderOnSomeMethodsAndNoDepsSample.class + ", " +
+                TestClassEFourMethodsWithDataProviderOnSomeMethodsAndNoDepsSample.class + ", " +
+                TestClassFSixMethodsWithDataProviderOnSomeMethodsAndNoDepsSample.class + ". Thread count: 4");
 
         tng.run();
 
@@ -413,26 +435,6 @@ public class ParallelByMethodsTestCase3Scenario2 extends BaseParallelizationTest
 
     }
 
-    //Verifies that the test methods execute in different threads in parallel fashion.
-    @Test
-    public void verifyThatTestMethodsRunInParallelThreads() {
-        verifyParallelTestMethodsWithNonParallelDataProvider(
-                getTestMethodLevelEventLogsForTest(SUITE_A, SUITE_A_TEST_A), SUITE_A_TEST_A, expectedInvocationCounts,
-                11, 3
-        );
-
-        verifyParallelTestMethodsWithNonParallelDataProvider(
-                getTestMethodLevelEventLogsForTest(SUITE_B, SUITE_B_TEST_A), SUITE_B_TEST_A, expectedInvocationCounts,
-                5, 4
-        );
-
-        verifyParallelTestMethodsWithNonParallelDataProvider(
-                getTestMethodLevelEventLogsForTest(SUITE_B, SUITE_B_TEST_B), SUITE_B_TEST_B, expectedInvocationCounts,
-                13,
-                4
-        );
-    }
-
     //Verifies that the method level events all run in different threads from the test and suite level events.
     //Verifies that the test method listener and execution events for a given test method all run in the same thread.
     @Test
@@ -477,6 +479,26 @@ public class ParallelByMethodsTestCase3Scenario2 extends BaseParallelizationTest
         verifyEventsForTestMethodsRunInTheSameThread(
                 TestClassFSixMethodsWithDataProviderOnSomeMethodsAndNoDepsSample.class, SUITE_B,
                 SUITE_B_TEST_B
+        );
+    }
+
+    //Verifies that the test methods execute in different threads in parallel fashion.
+    @Test
+    public void verifyThatTestMethodsRunInParallelThreads() {
+        verifyParallelTestMethodsWithNonParallelDataProvider(
+                getTestMethodLevelEventLogsForTest(SUITE_A, SUITE_A_TEST_A), SUITE_A_TEST_A, expectedInvocationCounts,
+                11, 3
+        );
+
+        verifyParallelTestMethodsWithNonParallelDataProvider(
+                getTestMethodLevelEventLogsForTest(SUITE_B, SUITE_B_TEST_A), SUITE_B_TEST_A, expectedInvocationCounts,
+                5, 4
+        );
+
+        verifyParallelTestMethodsWithNonParallelDataProvider(
+                getTestMethodLevelEventLogsForTest(SUITE_B, SUITE_B_TEST_B), SUITE_B_TEST_B, expectedInvocationCounts,
+                13,
+                4
         );
     }
 }

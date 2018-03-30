@@ -1,6 +1,7 @@
 package org.testng.internal;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -9,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
@@ -29,7 +31,7 @@ import org.testng.xml.XmlTest;
  * Superclass to represent both &#64;Test and &#64;Configuration methods.
  */
 public abstract class BaseTestMethod implements ITestNGMethod {
-  private static final long serialVersionUID = -2666032602580652173L;
+
   private static final Pattern SPACE_SEPARATOR_PATTERN = Pattern.compile(" +");
 
   /**
@@ -38,12 +40,12 @@ public abstract class BaseTestMethod implements ITestNGMethod {
    */
   protected ITestClass m_testClass;
 
-  protected final transient Class<?> m_methodClass;
-  protected final transient ConstructorOrMethod m_method;
-  private transient String m_signature;
+  protected final Class<?> m_methodClass;
+  protected final ConstructorOrMethod m_method;
+  private String m_signature;
   protected String m_id = "";
   protected long m_date = -1;
-  protected final transient IAnnotationFinder m_annotationFinder;
+  protected final IAnnotationFinder m_annotationFinder;
   protected String[] m_groups = {};
   protected String[] m_groupsDependedUpon = {};
   protected String[] m_methodsDependedUpon = {};
@@ -64,7 +66,7 @@ public abstract class BaseTestMethod implements ITestNGMethod {
   private long m_invocationTimeOut = 0L;
 
   private List<Integer> m_invocationNumbers = Lists.newArrayList();
-  private final List<Integer> m_failedInvocationNumbers = Collections.synchronizedList(Lists.<Integer>newArrayList());
+  private final Collection<Integer> m_failedInvocationNumbers = new ConcurrentLinkedQueue<>();
   private long m_timeOut = 0;
 
   private boolean m_ignoreMissingDependencies;
@@ -139,44 +141,12 @@ public abstract class BaseTestMethod implements ITestNGMethod {
     m_testClass = tc;
   }
 
-  @Override
-  public int compareTo(Object o) {
-    int result = -2;
-    Class<?> thisClass = getRealClass();
-    Class<?> otherClass = ((ITestNGMethod) o).getRealClass();
-    if (this == o || equals(o)) {
-      result = 0;
-    } else if (thisClass.isAssignableFrom(otherClass)) {
-      result = -1;
-    } else if (otherClass.isAssignableFrom(thisClass)) {
-      result = 1;
-    }
-
-    return result;
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public Method getMethod() {
-    return m_method.getMethod();
-  }
-
   /**
    * {@inheritDoc}
    */
   @Override
   public String getMethodName() {
     return m_methodName;
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public Object[] getInstances() {
-    return new Object[] { getInstance() };
   }
 
   @Override
@@ -336,15 +306,6 @@ public abstract class BaseTestMethod implements ITestNGMethod {
   }
 
   /**
-   * {@inheritDoc}
-   * @return the number of times this method or one of its clones must be invoked.
-   */
-  @Override
-  public int getTotalInvocationCount() {
-    return 1;
-  }
-
-  /**
    * {@inheritDoc} Default value for successPercentage.
    */
   @Override
@@ -445,38 +406,59 @@ public abstract class BaseTestMethod implements ITestNGMethod {
     //
     // Init groups depended upon
     //
-    {
-      ITestOrConfiguration annotation = getAnnotationFinder().findAnnotation(getConstructorOrMethod(), annotationClass);
-      ITestOrConfiguration classAnnotation = getAnnotationFinder().findAnnotation(getConstructorOrMethod().getDeclaringClass(), annotationClass);
-
-      Map<String, Set<String>> xgd = calculateXmlGroupDependencies(m_xmlTest);
-      List<String> xmlGroupDependencies = Lists.newArrayList();
-      for (String g : getGroups()) {
-        Set<String> gdu = xgd.get(g);
-        if (gdu != null) {
-          xmlGroupDependencies.addAll(gdu);
-        }
-      }
-      setGroupsDependedUpon(
-          getStringArray(null != annotation ? annotation.getDependsOnGroups() : null,
-          null != classAnnotation ? classAnnotation.getDependsOnGroups() : null),
-          xmlGroupDependencies);
-
-      String[] methodsDependedUpon =
-        getStringArray(null != annotation ? annotation.getDependsOnMethods() : null,
-        null != classAnnotation ? classAnnotation.getDependsOnMethods() : null);
-      // Qualify these methods if they don't have a package
-      for (int i = 0; i < methodsDependedUpon.length; i++) {
-        String m = methodsDependedUpon[i];
-        if (!m.contains(".")) {
-          m = MethodHelper.calculateMethodCanonicalName(m_methodClass, methodsDependedUpon[i]);
-          methodsDependedUpon[i] = m != null ? m : methodsDependedUpon[i];
-        }
-      }
-      setMethodsDependedUpon(methodsDependedUpon);
-    }
+    initRestOfGroupDependencies(annotationClass);
   }
 
+  protected void initBeforeAfterGroups(Class<? extends ITestOrConfiguration> annotationClass, String[] groups) {
+    String[] groupsAtMethodLevel = calculateGroupsTouseConsideringValuesAndGroupValues(annotationClass, groups);
+    //@BeforeGroups and @AfterGroups annotation cannot be used at Class level. So its always null
+    String[] groupsAtClassLevel = null;
+    setGroups(getStringArray(groupsAtMethodLevel, groupsAtClassLevel));
+    initRestOfGroupDependencies(annotationClass);
+  }
+
+  private String[] calculateGroupsTouseConsideringValuesAndGroupValues(Class<? extends ITestOrConfiguration> annotationClass, String[] groups) {
+    if (groups == null || groups.length == 0) {
+      ITestOrConfiguration annotation = getAnnotationFinder().findAnnotation(getConstructorOrMethod(), annotationClass);
+      groups = null != annotation ? annotation.getGroups() : null;
+    }
+    return groups;
+  }
+
+  private void initRestOfGroupDependencies(Class<? extends ITestOrConfiguration> annotationClass) {
+    //
+    // Init groups depended upon
+    //
+    ITestOrConfiguration annotation = getAnnotationFinder().findAnnotation(getConstructorOrMethod(), annotationClass);
+    ITestOrConfiguration classAnnotation = getAnnotationFinder().findAnnotation(getConstructorOrMethod().getDeclaringClass(), annotationClass);
+
+    Map<String, Set<String>> xgd = calculateXmlGroupDependencies(m_xmlTest);
+    List<String> xmlGroupDependencies = Lists.newArrayList();
+    for (String g : getGroups()) {
+      Set<String> gdu = xgd.get(g);
+      if (gdu != null) {
+        xmlGroupDependencies.addAll(gdu);
+      }
+    }
+    setGroupsDependedUpon(
+            getStringArray(null != annotation ? annotation.getDependsOnGroups() : null,
+                    null != classAnnotation ? classAnnotation.getDependsOnGroups() : null),
+            xmlGroupDependencies);
+
+    String[] methodsDependedUpon =
+            getStringArray(null != annotation ? annotation.getDependsOnMethods() : null,
+                    null != classAnnotation ? classAnnotation.getDependsOnMethods() : null);
+    // Qualify these methods if they don't have a package
+    for (int i = 0; i < methodsDependedUpon.length; i++) {
+      String m = methodsDependedUpon[i];
+      if (!m.contains(".")) {
+        m = MethodHelper.calculateMethodCanonicalName(m_methodClass, methodsDependedUpon[i]);
+        methodsDependedUpon[i] = m != null ? m : methodsDependedUpon[i];
+      }
+    }
+    setMethodsDependedUpon(methodsDependedUpon);
+
+  }
 
   private static Map<String, Set<String>> calculateXmlGroupDependencies(XmlTest xmlTest) {
     Map<String, Set<String>> result = Maps.newHashMap();
@@ -759,7 +741,7 @@ public abstract class BaseTestMethod implements ITestNGMethod {
 
   @Override
   public List<Integer> getFailedInvocationNumbers() {
-    return m_failedInvocationNumbers;
+    return new ArrayList<>(m_failedInvocationNumbers);
   }
 
   @Override
@@ -809,7 +791,7 @@ public abstract class BaseTestMethod implements ITestNGMethod {
 
     return result;
   }
-  
+
   @Override
   public String getQualifiedName() {
 	return getRealClass().getName() + "." + getMethodName();

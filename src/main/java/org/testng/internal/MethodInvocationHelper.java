@@ -50,6 +50,25 @@ public class MethodInvocationHelper {
     }
   }
 
+  protected static void invokeMethodConsideringTimeout(ITestNGMethod tm,
+                                         ConstructorOrMethod method,
+                                         Object targetInstance,
+                                         Object[] params,
+                                         ITestResult testResult) throws Throwable {
+    if (MethodHelper.calculateTimeOut(tm) <= 0) {
+      MethodInvocationHelper.invokeMethod(method.getMethod(), targetInstance, params);
+    } else {
+      MethodInvocationHelper.invokeWithTimeout(tm, targetInstance, params, testResult);
+      if (!testResult.isSuccess()) {
+        // A time out happened
+        Throwable ex = testResult.getThrowable();
+        testResult.setStatus(ITestResult.FAILURE);
+        testResult.setThrowable(ex.getCause() == null ? ex : ex.getCause());
+        throw testResult.getThrowable();
+      }
+    }
+  }
+
   protected static Object invokeMethod(Method thisMethod, Object instance, List<Object> parameters)
     throws InvocationTargetException, IllegalAccessException {
     return invokeMethod(thisMethod, instance, parameters.toArray(new Object[parameters.size()]));
@@ -62,7 +81,7 @@ public class MethodInvocationHelper {
     // TESTNG-326, allow IObjectFactory to load from non-standard classloader
     // If the instance has a different classloader, its class won't match the
     // method's class
-    if (instance == null || !thisMethod.getDeclaringClass().isAssignableFrom(instance.getClass())) {
+    if (instance != null && !thisMethod.getDeclaringClass().isAssignableFrom(instance.getClass())) {
       // for some reason, we can't call this method on this class
       // is it static?
       boolean isStatic = Modifier.isStatic(thisMethod.getModifiers());
@@ -85,9 +104,8 @@ public class MethodInvocationHelper {
           }
           if (!found) {
             // should we assert here? Or just allow it to fail on invocation?
-            if (thisMethod.getDeclaringClass().getName().equals(instance.getClass().getName())) {
-              throw new RuntimeException("Can't invoke method " + thisMethod
-                  + ", probably due to classloader mismatch");
+            if (thisMethod.getDeclaringClass().equals(instance.getClass())) {
+              throw new RuntimeException("Can't invoke method " + thisMethod + ", probably due to classloader mismatch");
             }
             throw new RuntimeException("Can't invoke method " + thisMethod
                 + " on this instance of " + instance.getClass() + " due to class mismatch");
@@ -96,9 +114,11 @@ public class MethodInvocationHelper {
       }
     }
 
-    synchronized(thisMethod) {
-      if (! Modifier.isPublic(thisMethod.getModifiers()) || !thisMethod.isAccessible()) {
+    if (!Modifier.isPublic(thisMethod.getModifiers()) || !thisMethod.isAccessible()) {
+      try {
         thisMethod.setAccessible(true);
+      } catch (SecurityException e) {
+        throw new TestNGException(thisMethod.getName() + " must be public", e);
       }
     }
     return thisMethod.invoke(instance, parameters);
@@ -109,6 +129,9 @@ public class MethodInvocationHelper {
       IAnnotationFinder annotationFinder) {
     List<Object> parameters = getParameters(dataProvider, method, testContext, fedInstance, annotationFinder);
     Object result = invokeMethodNoCheckedException(dataProvider, instance, parameters);
+    if (result == null) {
+      throw new TestNGException("Data Provider " + dataProvider + " returned a null value");
+    }
     // If it returns an Object[][] or Object[], convert it to an Iterator<Object[]>
     if (result instanceof Object[][]) {
       return new ArrayIterator((Object[][]) result);
@@ -130,7 +153,7 @@ public class MethodInvocationHelper {
       }
     }
     throw new TestNGException("Data Provider " + dataProvider + " must return"
-          + " either Object[][] or Iterator<Object>[], not " + dataProvider.getReturnType());
+          + " either Object[][] or Object[] or Iterator<Object[]> or Iterator<Object>, not " + dataProvider.getReturnType());
   }
 
   private static List<Object> getParameters(Method dataProvider, ITestNGMethod method, ITestContext testContext,
@@ -153,6 +176,8 @@ public class MethodInvocationHelper {
         parameters.add(method);
       } else if (cls.equals(ITestContext.class)) {
         parameters.add(testContext);
+      } else if (cls.equals(Class.class)) {
+        parameters.add(com.getDeclaringClass());
       } else {
         boolean isTestInstance = annotationFinder.hasTestInstance(dataProvider, i);
         if (isTestInstance) {
@@ -247,9 +272,19 @@ public class MethodInvocationHelper {
       Object[] parameterValues, ITestResult testResult, IHookable hookable) {
 
     InvokeMethodRunnable imr = new InvokeMethodRunnable(tm, instance, parameterValues, hookable, testResult);
+    long startTime = System.currentTimeMillis();
+    long realTimeOut = MethodHelper.calculateTimeOut(tm);
     try {
       imr.run();
-      testResult.setStatus(ITestResult.SUCCESS);
+      if (System.currentTimeMillis() <= startTime + realTimeOut) {
+        testResult.setStatus(ITestResult.SUCCESS);
+      } else {
+        ThreadTimeoutException exception = new ThreadTimeoutException("Method "
+            + tm.getQualifiedName() + "()"
+            + " didn't finish within the time-out " + realTimeOut);
+        testResult.setThrowable(exception);
+        testResult.setStatus(ITestResult.FAILURE);
+      }
     } catch (Exception ex) {
       testResult.setThrowable(ex.getCause());
       testResult.setStatus(ITestResult.FAILURE);
@@ -272,7 +307,10 @@ public class MethodInvocationHelper {
       ThreadTimeoutException exception = new ThreadTimeoutException("Method "
           + tm.getQualifiedName() + "()"
           + " didn't finish within the time-out " + realTimeOut);
-      exception.setStackTrace(exec.getStackTraces()[0]);
+      StackTraceElement[][] stacktraces = exec.getStackTraces();
+      if (stacktraces.length > 0) {
+        exception.setStackTrace(stacktraces[0]);
+      }
       testResult.setThrowable(exception);
       testResult.setStatus(ITestResult.FAILURE);
     } else {

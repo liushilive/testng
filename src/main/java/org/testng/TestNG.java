@@ -3,23 +3,17 @@ package org.testng;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Enumeration;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.jar.JarEntry;
-import java.util.jar.JarFile;
 
 import org.testng.annotations.ITestAnnotation;
 import org.testng.collections.Lists;
@@ -28,10 +22,11 @@ import org.testng.collections.Sets;
 import org.testng.internal.ClassHelper;
 import org.testng.internal.Configuration;
 import org.testng.internal.DynamicGraph;
+import org.testng.internal.ExitCode;
 import org.testng.internal.IConfiguration;
-import org.testng.internal.IResultListener2;
 import org.testng.internal.OverrideProcessor;
 import org.testng.internal.SuiteRunnerMap;
+import org.testng.internal.Systematiser;
 import org.testng.internal.Utils;
 import org.testng.internal.Version;
 import org.testng.internal.annotations.DefaultAnnotationTransformer;
@@ -50,6 +45,8 @@ import org.testng.reporters.SuiteHTMLReporter;
 import org.testng.reporters.VerboseReporter;
 import org.testng.reporters.XMLReporter;
 import org.testng.reporters.jq.Main;
+import org.testng.util.Strings;
+import org.testng.xml.IPostProcessor;
 import org.testng.xml.Parser;
 import org.testng.xml.XmlClass;
 import org.testng.xml.XmlInclude;
@@ -59,6 +56,9 @@ import org.testng.xml.XmlTest;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.ParameterException;
+
+import org.testng.xml.internal.TestNamesMatcher;
+import org.testng.xml.internal.XmlSuiteUtils;
 
 import static org.testng.internal.Utils.defaultIfStringEmpty;
 import static org.testng.internal.Utils.isStringEmpty;
@@ -138,16 +138,10 @@ public class TestNG {
   private final Map<Class<? extends ITestListener>, ITestListener> m_testListeners = Maps.newHashMap();
   private final Map<Class<? extends ISuiteListener>, ISuiteListener> m_suiteListeners = Maps.newHashMap();
   private final Map<Class<? extends IReporter>, IReporter> m_reporters = Maps.newHashMap();
+  private final Map<Class<? extends IDataProviderListener>, IDataProviderListener> m_dataProviderListeners = Maps.newHashMap();
 
-  protected static final int HAS_FAILURE = 1;
-  protected static final int HAS_SKIPPED = 2;
-  protected static final int HAS_FSP = 4;
-  protected static final int HAS_NO_TEST = 8;
 
   public static final Integer DEFAULT_VERBOSE = 1;
-
-  private int m_status;
-  private boolean m_hasTests= false;
 
   // Command line suite parameters
   private int m_threadCount = -1;
@@ -159,6 +153,8 @@ public class TestNG {
   private String m_defaultTestName=DEFAULT_COMMAND_LINE_TEST_NAME;
 
   private Map<String, Integer> m_methodDescriptors = Maps.newHashMap();
+
+  private Set<XmlMethodSelector> m_selectors = Sets.newLinkedHashSet();
 
   private ITestObjectFactory m_objectFactory;
 
@@ -179,10 +175,12 @@ public class TestNG {
   protected long m_end;
   protected long m_start;
 
-  private final Map<Class<? extends IExecutionListener>, IExecutionListener> m_executionListeners = Maps.newHashMap();
   private final Map<Class<? extends IAlterSuiteListener>, IAlterSuiteListener> m_alterSuiteListeners= Maps.newHashMap();
 
   private boolean m_isInitialized = false;
+  private boolean isSuiteInitialized = false;
+  private org.testng.internal.ExitCodeListener exitCodeListener;
+  private ExitCode exitCode;
 
   /**
    * Default constructor. Setting also usage of default listeners/reporters.
@@ -209,11 +207,10 @@ public class TestNG {
   }
 
   public int getStatus() {
-    return m_status;
-  }
-
-  private void setStatus(int status) {
-    m_status |= status;
+    if (!exitCodeListener.hasTests()) {
+      return ExitCode.HAS_NO_TEST;
+    }
+    return exitCode.getExitCode();
   }
 
   /**
@@ -259,38 +256,87 @@ public class TestNG {
     m_xmlPathInJar = xmlPathInJar;
   }
 
-  public void initializeSuitesAndJarFile() {
-    // The Eclipse plug-in (RemoteTestNG) might have invoked this method already
-    // so don't initialize suites twice.
-    if (m_isInitialized) {
-      return;
+  private void parseSuiteFiles() {
+    IPostProcessor processor = getProcessor();
+    for (XmlSuite s : m_suites) {
+      if (s.isParsed()) {
+        continue;
+      }
+      for (String suiteFile : s.getSuiteFiles()) {
+        try {
+          String fileNameToUse = s.getFileName();
+          if (fileNameToUse == null || fileNameToUse.trim().isEmpty()) {
+            fileNameToUse = suiteFile;
+          }
+          Collection<XmlSuite> childSuites = Parser.parse(fileNameToUse, processor);
+          for (XmlSuite cSuite : childSuites) {
+            cSuite.setParentSuite(s);
+            s.getChildSuites().add(cSuite);
+          }
+        } catch (IOException e) {
+          e.printStackTrace(System.out);
+        }
+      }
+
     }
 
-    m_isInitialized = true;
-    if (m_suites.size() > 0) {
-    	//to parse the suite files (<suite-file>), if any
-    	for (XmlSuite s: m_suites) {
-        for (String suiteFile : s.getSuiteFiles()) {
-            try {
-                Collection<XmlSuite> childSuites;
-                if (s.getFileName() != null) {
-                  Path rootPath = Paths.get(s.getFileName()).getParent();
-                  try (InputStream is = Files.newInputStream(rootPath.resolve(suiteFile))) {
-                    childSuites = getParser(is).parse();
-                  }
-                } else {
-                  childSuites = getParser(suiteFile).parse();
-                }
-                for (XmlSuite cSuite : childSuites){
-                    cSuite.setParentSuite(s);
-                    s.getChildSuites().add(cSuite);
-                }
-            } catch (IOException e) {
-                e.printStackTrace(System.out);
-            }
-        }
+  }
 
-    	}
+  private OverrideProcessor getProcessor() {
+    return new OverrideProcessor(m_includedGroups, m_excludedGroups);
+  }
+
+  private void parseSuite(String suitePath) {
+    if (LOGGER.isDebugEnabled()) {
+      LOGGER.debug("suiteXmlPath: \"" + suitePath + "\"");
+    }
+    try {
+      Collection<XmlSuite> allSuites = Parser.parse(suitePath, getProcessor());
+
+      for (XmlSuite s : allSuites) {
+        if (this.m_parallelMode != null) {
+          s.setParallel(this.m_parallelMode);
+        }
+        if (this.m_threadCount > 0) {
+          s.setThreadCount(this.m_threadCount);
+        }
+        if (m_testNames == null) {
+          m_suites.add(s);
+          continue;
+        }
+        // If test names were specified, only run these test names
+        TestNamesMatcher testNamesMatcher = new TestNamesMatcher(s, m_testNames);
+        List<String> missMatchedTestname = testNamesMatcher.getMissMatchedTestNames();
+        if (!missMatchedTestname.isEmpty()) {
+          throw new TestNGException("The test(s) <" + missMatchedTestname + "> cannot be found.");
+        }
+        m_suites.addAll(testNamesMatcher.getSuitesMatchingTestNames());
+      }
+    } catch (IOException e) {
+      e.printStackTrace(System.out);
+    } catch (Exception ex) {
+      // Probably a Yaml exception, unnest it
+      Throwable t = ex;
+      while (t.getCause() != null) {
+        t = t.getCause();
+      }
+      if (t instanceof TestNGException) {
+        throw (TestNGException) t;
+      }
+      throw new TestNGException(t);
+    }
+
+  }
+
+  public void initializeSuitesAndJarFile() {
+    // The IntelliJ plug-in might have invoked this method already so don't initialize suites twice.
+    if (isSuiteInitialized) {
+      return;
+    }
+    isSuiteInitialized = true;
+
+    if (!m_suites.isEmpty()) {
+      parseSuiteFiles(); //to parse the suite files (<suite-file>), if any
       return;
     }
 
@@ -298,32 +344,7 @@ public class TestNG {
     // Parse the suites that were passed on the command line
     //
     for (String suitePath : m_stringSuites) {
-      if(LOGGER.isDebugEnabled()) {
-        LOGGER.debug("suiteXmlPath: \"" + suitePath + "\"");
-      }
-      try {
-        Collection<XmlSuite> allSuites = getParser(suitePath).parse();
-
-        for (XmlSuite s : allSuites) {
-          // If test names were specified, only run these test names
-          if (m_testNames != null) {
-            m_suites.add(extractTestNames(s, m_testNames));
-          }
-          else {
-            m_suites.add(s);
-          }
-        }
-      }
-      catch(IOException e) {
-        e.printStackTrace(System.out);
-      } catch(Exception ex) {
-        // Probably a Yaml exception, unnest it
-        Throwable t = ex;
-        while (t.getCause() != null) t = t.getCause();
-//        t.printStackTrace();
-        if (t instanceof TestNGException) throw (TestNGException) t;
-        else throw new TestNGException(t);
-      }
+      parseSuite(suitePath);
     }
 
     //
@@ -331,7 +352,7 @@ public class TestNG {
     //
     // If suites were passed on the command line, they take precedence over the suite file
     // inside that jar path
-    if (m_jarPath != null && m_stringSuites.size() > 0) {
+    if (m_jarPath != null && !m_stringSuites.isEmpty()) {
       StringBuilder suites = new StringBuilder();
       for (String s : m_stringSuites) {
         suites.append(s);
@@ -347,112 +368,9 @@ public class TestNG {
     // We have a jar file and no XML file was specified: try to find an XML file inside the jar
     File jarFile = new File(m_jarPath);
 
-    try {
+    JarFileUtils utils = new JarFileUtils(getProcessor(),m_xmlPathInJar, m_testNames);
 
-      Utils.log("TestNG", 2, "Trying to open jar file:" + jarFile);
-
-      boolean foundTestngXml = false;
-      List<String> classes = Lists.newArrayList();
-      try (JarFile jf = new JarFile(jarFile)) {
-//      System.out.println("   result: " + jf);
-        Enumeration<JarEntry> entries = jf.entries();
-        while (entries.hasMoreElements()) {
-          JarEntry je = entries.nextElement();
-          if (je.getName().equals(m_xmlPathInJar)) {
-            Parser parser = getParser(jf.getInputStream(je));
-            Collection<XmlSuite> suites = parser.parse();
-            for (XmlSuite suite : suites) {
-              // If test names were specified, only run these test names
-              if (m_testNames != null) {
-                m_suites.add(extractTestNames(suite, m_testNames));
-              } else {
-                m_suites.add(suite);
-              }
-            }
-
-            foundTestngXml = true;
-            break;
-          } else if (je.getName().endsWith(".class")) {
-            int n = je.getName().length() - ".class".length();
-            classes.add(je.getName().replace("/", ".").substring(0, n));
-          }
-        }
-      }
-      if (! foundTestngXml) {
-        Utils.log("TestNG", 1,
-            "Couldn't find the " + m_xmlPathInJar + " in the jar file, running all the classes");
-        XmlSuite xmlSuite = new XmlSuite();
-        xmlSuite.setVerbose(0);
-        xmlSuite.setName("Jar suite");
-        XmlTest xmlTest = new XmlTest(xmlSuite);
-        List<XmlClass> xmlClasses = Lists.newArrayList();
-        for (String cls : classes) {
-          XmlClass xmlClass = new XmlClass(cls);
-          xmlClasses.add(xmlClass);
-        }
-        xmlTest.setXmlClasses(xmlClasses);
-        m_suites.add(xmlSuite);
-      }
-    }
-    catch(IOException ex) {
-      ex.printStackTrace();
-    }
-  }
-
-  private Parser getParser(String path) {
-    Parser result = new Parser(path);
-    initProcessor(result);
-    return result;
-  }
-
-  private Parser getParser(InputStream is) {
-    Parser result = new Parser(is);
-    initProcessor(result);
-    return result;
-  }
-
-  private void initProcessor(Parser result) {
-    result.setPostProcessor(new OverrideProcessor(m_includedGroups, m_excludedGroups));
-  }
-
-  /**
-   * If the XmlSuite contains at least one test named as testNames, return
-   * an XmlSuite that's made only of these tests, otherwise, return the
-   * original suite.
-   */
-  private static XmlSuite extractTestNames(XmlSuite s, List<String> testNames) {
-    extractTestNamesFromChildSuites(s, testNames);
-
-    List<XmlTest> tests = Lists.newArrayList();
-    for (XmlTest xt : s.getTests()) {
-      for (String tn : testNames) {
-        if (xt.getName().equals(tn)) {
-          tests.add(xt);
-        }
-      }
-    }
-
-    if (tests.size() == 0) {
-      throw new TestNGException("The test(s) <" + testNames.toString() + "> cannot be found.");
-    }
-    else {
-      XmlSuite result = (XmlSuite) s.clone();
-      result.getTests().clear();
-      result.getTests().addAll(tests);
-      return result;
-    }
-  }
-
-  private static void extractTestNamesFromChildSuites(XmlSuite s, List<String> testNames) {
-    List<XmlSuite> childSuites = s.getChildSuites();
-    for (int i = 0; i < childSuites.size(); i++) {
-      XmlSuite child = childSuites.get(i);
-      XmlSuite extracted = extractTestNames(child, testNames);
-      // if a new xml suite is created, which means some tests was extracted, then we replace the child
-      if (extracted != child) {
-        childSuites.set(i, extracted);
-      }
-    }
+    m_suites.addAll(utils.extractSuitesFrom(jarFile));
   }
 
   /**
@@ -471,6 +389,7 @@ public class TestNG {
    * @deprecated Use #setParallel(XmlSuite.ParallelMode) instead
    */
   @Deprecated
+  //TODO: krmahadevan: This method is being used by Gradle. Removal causes build failures.
   public void setParallel(String parallel) {
     if (parallel == null) {
       setParallel(XmlSuite.ParallelMode.NONE);
@@ -617,7 +536,13 @@ public class TestNG {
   }
 
   public void addMethodSelector(String className, int priority) {
-    m_methodDescriptors.put(className, priority);
+    if (Strings.isNotNullAndNotEmpty(className)) {
+      m_methodDescriptors.put(className, priority);
+    }
+  }
+
+  public void addMethodSelector(XmlMethodSelector selector) {
+    m_selectors.add(selector);
   }
 
   /**
@@ -712,9 +637,15 @@ public class TestNG {
     addListener((ITestNGListener) listener);
   }
 
-  private static <E> void maybeAddListener(Map<Class<? extends E>, E> map, Class<? extends E> type, E value) {
-    if (map.containsKey(value.getClass())) {
-      LOGGER.warn("Ignoring duplicate listener : " + value.getClass().getName());
+  private static <E> void maybeAddListener(Map<Class<? extends E>, E> map, E value) {
+    maybeAddListener(map, (Class<? extends E>) value.getClass(), value, false);
+  }
+
+  private static <E> void maybeAddListener(Map<Class<? extends E>, E> map, Class<? extends E> type, E value, boolean quiet) {
+    if (map.containsKey(type)) {
+      if (!quiet) {
+        LOGGER.warn("Ignoring duplicate listener : " + type.getName());
+      }
     } else {
       map.put(type, value);
     }
@@ -726,19 +657,19 @@ public class TestNG {
     }
     if (listener instanceof ISuiteListener) {
       ISuiteListener suite = (ISuiteListener) listener;
-      maybeAddListener(m_suiteListeners, suite.getClass(),  suite);
+      maybeAddListener(m_suiteListeners, suite);
     }
     if (listener instanceof ITestListener) {
       ITestListener test = (ITestListener) listener;
-      maybeAddListener(m_testListeners, test.getClass(), test);
+      maybeAddListener(m_testListeners, test);
     }
     if (listener instanceof IClassListener) {
       IClassListener clazz = (IClassListener) listener;
-      maybeAddListener(m_classListeners, clazz.getClass(), clazz);
+      maybeAddListener(m_classListeners, clazz);
     }
     if (listener instanceof IReporter) {
       IReporter reporter = (IReporter) listener;
-      maybeAddListener(m_reporters, reporter.getClass(), reporter);
+      maybeAddListener(m_reporters, reporter);
     }
     if (listener instanceof IAnnotationTransformer) {
       setAnnotationTransformer((IAnnotationTransformer) listener);
@@ -748,7 +679,7 @@ public class TestNG {
     }
     if (listener instanceof IInvokedMethodListener) {
       IInvokedMethodListener method = (IInvokedMethodListener) listener;
-      maybeAddListener(m_invokedMethodListeners, method.getClass(), method);
+      maybeAddListener(m_invokedMethodListeners, method);
     }
     if (listener instanceof IHookable) {
       setHookable((IHookable) listener);
@@ -757,70 +688,19 @@ public class TestNG {
       setConfigurable((IConfigurable) listener);
     }
     if (listener instanceof IExecutionListener) {
-      IExecutionListener execution = (IExecutionListener) listener;
-      maybeAddListener(m_executionListeners, execution.getClass(), execution);
+      m_configuration.addExecutionListenerIfAbsent((IExecutionListener) listener);
     }
     if (listener instanceof IConfigurationListener) {
-      getConfiguration().addConfigurationListener((IConfigurationListener) listener);
+      m_configuration.addConfigurationListener((IConfigurationListener) listener);
     }
     if (listener instanceof IAlterSuiteListener) {
       IAlterSuiteListener alter = (IAlterSuiteListener) listener;
-      maybeAddListener(m_alterSuiteListeners, alter.getClass(), alter);
+      maybeAddListener(m_alterSuiteListeners, alter);
     }
-  }
-
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO remove later
-  @Deprecated
-  public void addListener(IInvokedMethodListener listener) {
-    addListener((ITestNGListener) listener);
-  }
-
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO remove later
-  @Deprecated
-  public void addListener(ISuiteListener listener) {
-    addListener((ITestNGListener) listener);
-  }
-
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO remove later
-  @Deprecated
-  public void addListener(ITestListener listener) {
-    addListener((ITestNGListener) listener);
-  }
-
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO remove later
-  @Deprecated
-  public void addListener(IClassListener listener) {
-    addListener((ITestNGListener) listener);
-  }
-
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO remove later
-  @Deprecated
-  public void addListener(IReporter listener) {
-    addListener((ITestNGListener) listener);
-  }
-
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO remove later
-  @Deprecated
-  public void addInvokedMethodListener(IInvokedMethodListener listener) {
-    addListener((ITestNGListener) listener);
+    if (listener instanceof IDataProviderListener) {
+      IDataProviderListener dataProvider = (IDataProviderListener) listener;
+      maybeAddListener(m_dataProviderListeners, dataProvider);
+    }
   }
 
   public Set<IReporter> getReporters() {
@@ -919,16 +799,22 @@ public class TestNG {
     List<XmlSuite> suites = m_cmdlineSuites != null ? m_cmdlineSuites : m_suites;
     if (hasIncludedGroups || hasExcludedGroups) {
       for (XmlSuite s : suites) {
-        //set on each test, instead of just the first one of the suite
-        for (XmlTest t : s.getTests()) {
-          if(hasIncludedGroups) {
-            t.setIncludedGroups(Arrays.asList(m_includedGroups));
-          }
-          if(hasExcludedGroups) {
-            t.setExcludedGroups(Arrays.asList(m_excludedGroups));
-          }
-        }
+        initializeCommandLineSuitesGroups(s, hasIncludedGroups, m_includedGroups, hasExcludedGroups, m_excludedGroups);
       }
+    }
+  }
+
+  private static void initializeCommandLineSuitesGroups(XmlSuite s,
+                                                        boolean hasIncludedGroups, String[] m_includedGroups,
+                                                        boolean hasExcludedGroups, String[] m_excludedGroups) {
+    if (hasIncludedGroups) {
+      s.setIncludedGroups(Arrays.asList(m_includedGroups));
+    }
+    if (hasExcludedGroups) {
+      s.setExcludedGroups(Arrays.asList(m_excludedGroups));
+    }
+    for (XmlSuite child : s.getChildSuites()) {
+      initializeCommandLineSuitesGroups(child, hasIncludedGroups, m_includedGroups, hasExcludedGroups, m_excludedGroups);
     }
   }
   private void addReporter(Class<? extends IReporter> r) {
@@ -938,8 +824,8 @@ public class TestNG {
   }
 
   private void initializeDefaultListeners() {
-    m_testListeners.put(ExitCodeListener.class, new ExitCodeListener(this));
-
+    this.exitCodeListener = new org.testng.internal.ExitCodeListener();
+    addListener((ITestNGListener) this.exitCodeListener);
     if (m_useDefaultListeners) {
       addReporter(SuiteHTMLReporter.class);
       addReporter(Main.class);
@@ -969,24 +855,14 @@ public class TestNG {
     // Install the listeners found in the suites
     //
     for (XmlSuite s : m_suites) {
-      for (String listenerName : s.getListeners()) {
-        Class<?> listenerClass = ClassHelper.forName(listenerName);
-
-        // If specified listener does not exist, a TestNGException will be thrown
-        if(listenerClass == null) {
-          throw new TestNGException("Listener " + listenerName
-              + " was not found in project's classpath");
-        }
-
-        Object listener = ClassHelper.newInstance(listenerClass);
-        addListener(listener);
-      }
+      addListeners(s);
 
       //
       // Install the method selectors
       //
       for (XmlMethodSelector methodSelector : s.getMethodSelectors() ) {
         addMethodSelector(methodSelector.getClassName(), methodSelector.getPriority());
+        addMethodSelector(methodSelector);
       }
 
       //
@@ -1005,6 +881,26 @@ public class TestNG {
     m_configuration.setHookable(m_hookable);
     m_configuration.setConfigurable(m_configurable);
     m_configuration.setObjectFactory(factory);
+  }
+
+  private void addListeners(XmlSuite s) {
+    for (String listenerName : s.getListeners()) {
+      Class<?> listenerClass = ClassHelper.forName(listenerName);
+
+      // If specified listener does not exist, a TestNGException will be thrown
+      if(listenerClass == null) {
+        throw new TestNGException("Listener " + listenerName + " was not found in project's classpath");
+      }
+
+      ITestNGListener listener = (ITestNGListener) ClassHelper.newInstance(listenerClass);
+      addListener(listener);
+    }
+
+    // Add the child suite listeners
+    List<XmlSuite> childSuites = s.getChildSuites();
+    for (XmlSuite c : childSuites) {
+      addListeners(c);
+    }
   }
 
   /**
@@ -1028,63 +924,20 @@ public class TestNG {
    * @throws TestNGException if the sanity check fails
    */
   private void sanityCheck() {
-    checkTestNames(m_suites);
-    checkSuiteNames(m_suites);
+    XmlSuiteUtils.validateIfSuitesContainDuplicateTests(m_suites);
+    XmlSuiteUtils.adjustSuiteNamesToEnsureUniqueness(m_suites);
   }
 
   /**
-   * Ensure that two XmlTest within the same XmlSuite don't have the same name
+   * Invoked by the remote runner.
    */
-  private void checkTestNames(List<XmlSuite> suites) {
-    for (XmlSuite suite : suites) {
-      Set<String> testNames = Sets.newHashSet();
-      for (XmlTest test : suite.getTests()) {
-        if (testNames.contains(test.getName())) {
-          throw new TestNGException("Two tests in the same suite "
-              + "cannot have the same name: " + test.getName());
-        } else {
-          testNames.add(test.getName());
-        }
-      }
-      checkTestNames(suite.getChildSuites());
+  public void initializeEverything() {
+    // The Eclipse plug-in (RemoteTestNG) might have invoked this method already
+    // so don't initialize suites twice.
+    if (m_isInitialized) {
+      return;
     }
-  }
 
-  /**
-   * Ensure that two XmlSuite don't have the same name
-   * Otherwise will be clash in SuiteRunnerMap
-   * See issue #302
-   */
-  private void checkSuiteNames(List<XmlSuite> suites) {
-    checkSuiteNamesInternal(suites, Sets.<String>newHashSet());
-  }
-
-  private void checkSuiteNamesInternal(List<XmlSuite> suites, Set<String> names) {
-    for (XmlSuite suite : suites) {
-      final String name = suite.getName();
-
-      int count = 0;
-      String tmpName = name;
-      while (names.contains(tmpName)) {
-        tmpName = name + " (" + count++ + ")";
-      }
-
-      if (count > 0) {
-        suite.setName(tmpName);
-        names.add(tmpName);
-      } else {
-        names.add(name);
-      }
-
-      names.add(name);
-      checkSuiteNamesInternal(suite.getChildSuites(), names);
-    }
-  }
-
-  /**
-   * Run TestNG.
-   */
-  public void run() {
     initializeSuitesAndJarFile();
     initializeConfiguration();
     initializeDefaultListeners();
@@ -1092,16 +945,22 @@ public class TestNG {
     initializeCommandLineSuitesParams();
     initializeCommandLineSuitesGroups();
 
-    sanityCheck();
+    m_isInitialized = true;
+  }
 
-    List<ISuite> suiteRunners = null;
+  /**
+   * Run TestNG.
+   */
+  public void run() {
+    initializeEverything();
+    sanityCheck();
 
     runExecutionListeners(true /* start */);
 
     runSuiteAlterationListeners();
 
     m_start = System.currentTimeMillis();
-    suiteRunners = runSuites();
+    List<ISuite> suiteRunners = runSuites();
 
     m_end = System.currentTimeMillis();
 
@@ -1110,14 +969,17 @@ public class TestNG {
     }
 
     runExecutionListeners(false /* finish */);
+    exitCode = this.exitCodeListener.getStatus();
 
-    if(!m_hasTests) {
-      setStatus(HAS_NO_TEST);
+    if(!exitCodeListener.hasTests()) {
       if (TestRunner.getVerbose() > 1) {
         System.err.println("[TestNG] No tests found. Nothing was run");
         usage();
       }
     }
+
+    m_instance = null;
+    m_jCommander = null;
   }
 
   /**
@@ -1134,40 +996,19 @@ public class TestNG {
   }
 
   private void runSuiteAlterationListeners() {
-    for (Collection<IAlterSuiteListener> listeners
-        : Arrays.asList(m_alterSuiteListeners.values(), m_configuration.getAlterSuiteListeners())) {
-      for (IAlterSuiteListener l : listeners) {
-        l.alter(m_suites);
-      }
+    for (IAlterSuiteListener l : m_alterSuiteListeners.values()) {
+      l.alter(m_suites);
     }
   }
 
   private void runExecutionListeners(boolean start) {
-    for (Collection<IExecutionListener> listeners
-        : Arrays.asList(m_executionListeners.values(), m_configuration.getExecutionListeners())) {
-      for (IExecutionListener l : listeners) {
-        if (start) l.onExecutionStart();
-        else l.onExecutionFinish();
+    for (IExecutionListener l : m_configuration.getExecutionListeners()) {
+      if (start) {
+        l.onExecutionStart();
+      } else {
+        l.onExecutionFinish();
       }
     }
-  }
-
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO remove later
-  @Deprecated
-  public void addAlterSuiteListener(IAlterSuiteListener l) {
-    addListener((ITestNGListener) l);
-  }
-
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO remove later
-  @Deprecated
-  public void addExecutionListener(IExecutionListener l) {
-    addListener((ITestNGListener) l);
   }
 
   private static void usage() {
@@ -1197,60 +1038,62 @@ public class TestNG {
    * until an alternative mechanism is found.
    */
   public List<ISuite> runSuitesLocally() {
-    SuiteRunnerMap suiteRunnerMap = new SuiteRunnerMap();
-    if (m_suites.size() > 0) {
-      if (m_suites.get(0).getVerbose() >= 2) {
-        Version.displayBanner();
-      }
-
-      // First initialize the suite runners to ensure there are no configuration issues.
-      // Create a map with XmlSuite as key and corresponding SuiteRunner as value
-      for (XmlSuite xmlSuite : m_suites) {
-        createSuiteRunners(suiteRunnerMap, xmlSuite);
-      }
-
-      //
-      // Run suites
-      //
-      if (m_suiteThreadPoolSize == 1 && !m_randomizeSuites) {
-        // Single threaded and not randomized: run the suites in order
-        for (XmlSuite xmlSuite : m_suites) {
-          runSuitesSequentially(xmlSuite, suiteRunnerMap, getVerbose(xmlSuite),
-              getDefaultSuiteName());
-        }
-      } else {
-        // Multithreaded: generate a dynamic graph that stores the suite hierarchy. This is then
-        // used to run related suites in specific order. Parent suites are run only
-        // once all the child suites have completed execution
-        DynamicGraph<ISuite> suiteGraph = new DynamicGraph<>();
-        for (XmlSuite xmlSuite : m_suites) {
-          populateSuiteGraph(suiteGraph, suiteRunnerMap, xmlSuite);
-        }
-
-        IThreadWorkerFactory<ISuite> factory = new SuiteWorkerFactory(suiteRunnerMap,
-          0 /* verbose hasn't been set yet */, getDefaultSuiteName());
-        GraphThreadPoolExecutor<ISuite> pooledExecutor =
-                new GraphThreadPoolExecutor<>(suiteGraph, factory, m_suiteThreadPoolSize,
-                        m_suiteThreadPoolSize, Integer.MAX_VALUE, TimeUnit.MILLISECONDS,
-                        new LinkedBlockingQueue<Runnable>());
-
-        Utils.log("TestNG", 2, "Starting executor for all suites");
-        // Run all suites in parallel
-        pooledExecutor.run();
-        try {
-          pooledExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
-          pooledExecutor.shutdownNow();
-        }
-        catch (InterruptedException handled) {
-          Thread.currentThread().interrupt();
-          error("Error waiting for concurrent executors to finish " + handled.getMessage());
-        }
-      }
-    }
-    else {
-      setStatus(HAS_NO_TEST);
+    if (m_suites.isEmpty()) {
       error("No test suite found. Nothing to run");
       usage();
+      return Collections.emptyList();
+    }
+
+    SuiteRunnerMap suiteRunnerMap = new SuiteRunnerMap();
+
+    if (m_suites.get(0).getVerbose() >= 2) {
+      Version.displayBanner();
+    }
+
+    // First initialize the suite runners to ensure there are no configuration issues.
+    // Create a map with XmlSuite as key and corresponding SuiteRunner as value
+    for (XmlSuite xmlSuite : m_suites) {
+      createSuiteRunners(suiteRunnerMap, xmlSuite);
+    }
+
+    //
+    // Run suites
+    //
+    if (m_suiteThreadPoolSize == 1 && !m_randomizeSuites) {
+      // Single threaded and not randomized: run the suites in order
+      for (XmlSuite xmlSuite : m_suites) {
+        runSuitesSequentially(xmlSuite, suiteRunnerMap, getVerbose(xmlSuite),
+                getDefaultSuiteName());
+      }
+      //
+      // Generate the suites report
+      //
+      return Lists.newArrayList(suiteRunnerMap.values());
+    }
+    // Multithreaded: generate a dynamic graph that stores the suite hierarchy. This is then
+    // used to run related suites in specific order. Parent suites are run only
+    // once all the child suites have completed execution
+    DynamicGraph<ISuite> suiteGraph = new DynamicGraph<>();
+    for (XmlSuite xmlSuite : m_suites) {
+      populateSuiteGraph(suiteGraph, suiteRunnerMap, xmlSuite);
+    }
+
+    IThreadWorkerFactory<ISuite> factory = new SuiteWorkerFactory(suiteRunnerMap,
+            0 /* verbose hasn't been set yet */, getDefaultSuiteName());
+    GraphThreadPoolExecutor<ISuite> pooledExecutor =
+            new GraphThreadPoolExecutor<>("suites", suiteGraph, factory, m_suiteThreadPoolSize,
+                    m_suiteThreadPoolSize, Integer.MAX_VALUE, TimeUnit.MILLISECONDS,
+                    new LinkedBlockingQueue<Runnable>());
+
+    Utils.log("TestNG", 2, "Starting executor for all suites");
+    // Run all suites in parallel
+    pooledExecutor.run();
+    try {
+      pooledExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+      pooledExecutor.shutdownNow();
+    } catch (InterruptedException handled) {
+      Thread.currentThread().interrupt();
+      error("Error waiting for concurrent executors to finish " + handled.getMessage());
     }
 
     //
@@ -1350,6 +1193,9 @@ public class TestNG {
         xms.setPriority(ms.getValue());
         t.getMethodSelectors().add(xms);
       }
+      for (XmlMethodSelector selector : m_selectors) {
+        t.getMethodSelectors().add(selector);
+      }
     }
 
     suiteRunnerMap.put(xmlSuite, createSuiteRunner(xmlSuite));
@@ -1372,14 +1218,16 @@ public class TestNG {
         m_methodInterceptors,
         m_invokedMethodListeners.values(),
         m_testListeners.values(),
-        m_classListeners.values());
+        m_classListeners.values(),
+        m_dataProviderListeners,
+        Systematiser.getComparator());
 
     for (ISuiteListener isl : m_suiteListeners.values()) {
       result.addListener(isl);
     }
 
     for (IReporter r : result.getReporters()) {
-      addListener(r);
+      maybeAddListener(m_reporters, r.getClass(), r, true);
     }
 
     for (IConfigurationListener cl : m_configuration.getConfigurationListeners()) {
@@ -1411,7 +1259,7 @@ public class TestNG {
     TestNG result = new TestNG();
 
     if (null != listener) {
-      result.addListener((Object)listener);
+      result.addListener(listener);
     }
 
     //
@@ -1440,7 +1288,7 @@ public class TestNG {
       else {
         error(ex.getMessage());
       }
-      result.setStatus(HAS_FAILURE);
+      result.exitCode = ExitCode.newExitCodeRepresentingFailure();
     }
 
     return result;
@@ -1494,7 +1342,7 @@ public class TestNG {
       setParallel(cla.parallelMode);
     }
     if (cla.configFailurePolicy != null) {
-      setConfigFailurePolicy(cla.configFailurePolicy);
+      setConfigFailurePolicy(XmlSuite.FailurePolicy.getValidPolicy(cla.configFailurePolicy));
     }
     if (cla.threadCount != null) {
       setThreadCount(cla.threadCount);
@@ -1711,11 +1559,11 @@ public class TestNG {
   }
 
   private void addReporter(ReporterConfig reporterConfig) {
-    Object instance = reporterConfig.newReporterInstance();
+    IReporter instance = reporterConfig.newReporterInstance();
     if (instance != null) {
       addListener(instance);
     } else {
-      LOGGER.warn("Could not find reporte class : " + reporterConfig.getClassName());
+      LOGGER.warn("Could not find reporter class : " + reporterConfig.getClassName());
     }
   }
 
@@ -1736,25 +1584,6 @@ public class TestNG {
           return;
       }
     m_isMixed = isMixed;
-  }
-
-  /**
-   * @deprecated The TestNG version is now established at load time. This
-   * method is not required anymore and is now a no-op.
-   */
-  @Deprecated
-  public static void setTestNGVersion() {
-    LOGGER.info("setTestNGVersion has been deprecated.");
-  }
-
-  /**
-   * Returns true if this is the JDK 1.4 JAR version of TestNG, false otherwise.
-   *
-   * @return true if this is the JDK 1.4 JAR version of TestNG, false otherwise.
-   */
-  @Deprecated
-  public static boolean isJdk14() {
-    return false;
   }
 
   /**
@@ -1794,21 +1623,21 @@ public class TestNG {
    * @return true if at least one test failed.
    */
   public boolean hasFailure() {
-    return (getStatus() & HAS_FAILURE) == HAS_FAILURE;
+    return this.exitCode.hasFailure();
   }
 
   /**
    * @return true if at least one test failed within success percentage.
    */
   public boolean hasFailureWithinSuccessPercentage() {
-    return (getStatus() & HAS_FSP) == HAS_FSP;
+    return this.exitCode.hasFailureWithinSuccessPercentage();
   }
 
   /**
    * @return true if at least one test was skipped.
    */
   public boolean hasSkip() {
-    return (getStatus() & HAS_SKIPPED) == HAS_SKIPPED;
+    return this.exitCode.hasSkip();
   }
 
   static void exitWithError(String msg) {
@@ -1825,12 +1654,7 @@ public class TestNG {
     return m_annotationTransformer;
   }
 
-  /**
-   * @deprecated Use addListener(ITestNGListener) instead
-   */
-  // TODO make private
-  @Deprecated
-  public void setAnnotationTransformer(IAnnotationTransformer t) {
+  private void setAnnotationTransformer(IAnnotationTransformer t) {
 	// compare by reference!
     if (m_annotationTransformer != m_defaultAnnoProcessor && m_annotationTransformer != t) {
     	LOGGER.warn("AnnotationTransformer already set");
@@ -1877,14 +1701,6 @@ public class TestNG {
   }
 
   /**
-   * @deprecated Use {@link #setConfigFailurePolicy(org.testng.xml.XmlSuite.FailurePolicy)} instead
-   */
-  @Deprecated
-  public void setConfigFailurePolicy(String failurePolicy) {
-    setConfigFailurePolicy(XmlSuite.FailurePolicy.getValidPolicy(failurePolicy));
-  }
-
-  /**
    * Returns the configuration failure policy.
    * @return config failure policy
    */
@@ -1899,112 +1715,6 @@ public class TestNG {
   @Deprecated
   public static TestNG getDefault() {
     return m_instance;
-  }
-
-  /**
-   * @deprecated since 5.1
-   */
-  @Deprecated
-  public void setHasFailure(boolean hasFailure) {
-    m_status |= HAS_FAILURE;
-  }
-
-  /**
-   * @deprecated since 5.1
-   */
-  @Deprecated
-  public void setHasFailureWithinSuccessPercentage(boolean hasFailureWithinSuccessPercentage) {
-    m_status |= HAS_FSP;
-  }
-
-  /**
-   * @deprecated since 5.1
-   */
-  @Deprecated
-  public void setHasSkip(boolean hasSkip) {
-    m_status |= HAS_SKIPPED;
-  }
-
-  public static class ExitCodeListener implements IResultListener2 {
-    private TestNG m_mainRunner;
-
-    public ExitCodeListener() {
-      m_mainRunner = TestNG.m_instance;
-    }
-
-    public ExitCodeListener(TestNG runner) {
-      m_mainRunner = runner;
-    }
-
-    @Override
-    public void beforeConfiguration(ITestResult tr) {
-    }
-
-    @Override
-    public void onTestFailure(ITestResult result) {
-      setHasRunTests();
-      m_mainRunner.setStatus(HAS_FAILURE);
-    }
-
-    @Override
-    public void onTestSkipped(ITestResult result) {
-      setHasRunTests();
-      if ((m_mainRunner.getStatus() & HAS_FAILURE) != 0) {
-        m_mainRunner.setStatus(HAS_SKIPPED);
-      }
-    }
-
-    @Override
-    public void onTestFailedButWithinSuccessPercentage(ITestResult result) {
-      setHasRunTests();
-      m_mainRunner.setStatus(HAS_FSP);
-    }
-
-    @Override
-    public void onTestSuccess(ITestResult result) {
-      setHasRunTests();
-    }
-
-    @Override
-    public void onStart(ITestContext context) {
-      setHasRunTests();
-    }
-
-    @Override
-    public void onFinish(ITestContext context) {
-    }
-
-    @Override
-    public void onTestStart(ITestResult result) {
-      setHasRunTests();
-    }
-
-    private void setHasRunTests() {
-      m_mainRunner.m_hasTests= true;
-    }
-
-    /**
-     * @see org.testng.IConfigurationListener#onConfigurationFailure(org.testng.ITestResult)
-     */
-    @Override
-    public void onConfigurationFailure(ITestResult itr) {
-      m_mainRunner.setStatus(HAS_FAILURE);
-    }
-
-    /**
-     * @see org.testng.IConfigurationListener#onConfigurationSkip(org.testng.ITestResult)
-     */
-    @Override
-    public void onConfigurationSkip(ITestResult itr) {
-      m_mainRunner.setStatus(HAS_SKIPPED);
-    }
-
-    /**
-     * @see org.testng.IConfigurationListener#onConfigurationSuccess(org.testng.ITestResult)
-     */
-    @Override
-    public void onConfigurationSuccess(ITestResult itr) {
-    }
   }
 
   private void setConfigurable(IConfigurable c) {
@@ -2059,7 +1769,7 @@ public class TestNG {
   //
 
   private URLClassLoader m_serviceLoaderClassLoader;
-  private Map<Class<? extends ITestNGListener>, ITestNGListener> m_serviceLoaderListeners = Maps.newHashMap();
+  private Map<Class<? extends ITestNGListener>, ITestNGListener> serviceLoaderListeners = Maps.newHashMap();
 
   /*
    * Used to test ServiceClassLoader
@@ -2072,8 +1782,8 @@ public class TestNG {
    * Used to test ServiceClassLoader
    */
   private void addServiceLoaderListener(ITestNGListener l) {
-    if (! m_serviceLoaderListeners.containsKey(l.getClass())) {
-      m_serviceLoaderListeners.put(l.getClass(), l);
+    if (! serviceLoaderListeners.containsKey(l.getClass())) {
+      serviceLoaderListeners.put(l.getClass(), l);
     }
   }
 
@@ -2081,7 +1791,7 @@ public class TestNG {
    * Used to test ServiceClassLoader
    */
   public List<ITestNGListener> getServiceLoaderListeners() {
-    return Lists.newArrayList(m_serviceLoaderListeners.values());
+    return Lists.newArrayList(serviceLoaderListeners.values());
   }
 
   //

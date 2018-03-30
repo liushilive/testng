@@ -15,11 +15,13 @@ import java.net.UnknownHostException;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Collection;
+import java.util.Queue;
 import java.util.TimeZone;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.regex.Pattern;
 
 import java.text.SimpleDateFormat;
@@ -47,10 +49,8 @@ public class JUnitXMLReporter implements IResultListener2 {
 
 
   private int m_numFailed= 0;
-  private List<ITestResult> m_allTests =
-      Collections.synchronizedList(Lists.<ITestResult>newArrayList());
-  private List<ITestResult> m_configIssues =
-      Collections.synchronizedList(Lists.<ITestResult>newArrayList());
+  private Queue<ITestResult> m_allTests = new ConcurrentLinkedDeque<>();
+  private Queue<ITestResult> m_configIssues = new ConcurrentLinkedDeque<>();
   private Map<String, String> m_fileNameMap = Maps.newHashMap();
   private int m_fileNameIncrementer = 0;
 
@@ -146,8 +146,8 @@ public class JUnitXMLReporter implements IResultListener2 {
 
       Properties attrs= new Properties();
       attrs.setProperty(XMLConstants.ATTR_ERRORS, "0");
-      attrs.setProperty(XMLConstants.ATTR_FAILURES, "" + m_numFailed);
-      attrs.setProperty(XMLConstants.ATTR_IGNORED, "" + context.getExcludedMethods().size());
+      attrs.setProperty(XMLConstants.ATTR_FAILURES, Integer.toString(m_numFailed));
+      attrs.setProperty(XMLConstants.ATTR_IGNORED, Integer.toString(context.getExcludedMethods().size()));
       try {
         attrs.setProperty(XMLConstants.ATTR_HOSTNAME, InetAddress.getLocalHost().getHostName());
       } catch (UnknownHostException e) {
@@ -159,9 +159,9 @@ public class JUnitXMLReporter implements IResultListener2 {
 //        attrs.setProperty(XMLConstants.ATTR_PACKAGE, packages.iterator().next());
       }
 
-      attrs.setProperty(XMLConstants.ATTR_TESTS, "" + m_allTests.size());
-      attrs.setProperty(XMLConstants.ATTR_TIME, ""
-          + ((context.getEndDate().getTime() - context.getStartDate().getTime()) / 1000.0));
+      attrs.setProperty(XMLConstants.ATTR_TESTS, Integer.toString(m_allTests.size()));
+      attrs.setProperty(XMLConstants.ATTR_TIME,
+          Double.toString((context.getEndDate().getTime() - context.getStartDate().getTime()) / 1000.0));
 
       attrs.setProperty(XMLConstants.ATTR_TIMESTAMP, timeAsGmt());
 
@@ -182,7 +182,7 @@ public class JUnitXMLReporter implements IResultListener2 {
     return sdf.format(Calendar.getInstance().getTime());
   }
 
-  private synchronized void createElementFromTestResults(XMLStringBuffer document, List<ITestResult> results) {
+  private synchronized void createElementFromTestResults(XMLStringBuffer document, Collection<ITestResult> results) {
     for(ITestResult tr : results) {
       createElement(document, tr);
     }
@@ -193,7 +193,7 @@ public class JUnitXMLReporter implements IResultListener2 {
     for (ITestNGMethod method : methods) {
       Properties properties = getPropertiesFor(method, 0);
       doc.push(XMLConstants.TESTCASE,properties);
-      doc.addEmptyElement("ignored");
+      doc.addEmptyElement(XMLConstants.ATTR_IGNORED);
       doc.pop();
     }
   }
@@ -203,7 +203,7 @@ public class JUnitXMLReporter implements IResultListener2 {
     String name= Utils.detailedMethodName(method, false);
     attrs.setProperty(XMLConstants.ATTR_NAME, name);
     attrs.setProperty(XMLConstants.ATTR_CLASSNAME, method.getRealClass().getName());
-    attrs.setProperty(XMLConstants.ATTR_TIME, "" + (((double) elapsedTimeMillis) / 1000));
+    attrs.setProperty(XMLConstants.ATTR_TIME, Double.toString(((double) elapsedTimeMillis) / 1000));
     return attrs;
   }
 
@@ -304,8 +304,8 @@ public class JUnitXMLReporter implements IResultListener2 {
 	 * Reset all member variables for next test.
 	 * */
 	private void resetAll() {
-		m_allTests = Collections.synchronizedList(Lists.<ITestResult>newArrayList());
-		m_configIssues = Collections.synchronizedList(Lists.<ITestResult>newArrayList());
+		m_allTests = new ConcurrentLinkedDeque<>();
+		m_configIssues = new ConcurrentLinkedDeque<>();
 		m_numFailed = 0;
     }
 

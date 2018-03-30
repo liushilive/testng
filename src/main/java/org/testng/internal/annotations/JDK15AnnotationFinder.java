@@ -20,14 +20,11 @@ import org.testng.annotations.BeforeGroups;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.BeforeSuite;
 import org.testng.annotations.BeforeTest;
-import org.testng.annotations.Configuration;
 import org.testng.annotations.DataProvider;
-import org.testng.annotations.ExpectedExceptions;
 import org.testng.annotations.Factory;
 import org.testng.annotations.IAnnotation;
 import org.testng.annotations.IConfigurationAnnotation;
 import org.testng.annotations.IDataProviderAnnotation;
-import org.testng.annotations.IExpectedExceptionsAnnotation;
 import org.testng.annotations.IFactoryAnnotation;
 import org.testng.annotations.IListenersAnnotation;
 import org.testng.annotations.IObjectFactoryAnnotation;
@@ -54,15 +51,13 @@ public class JDK15AnnotationFinder implements IAnnotationFinder {
       new ConcurrentHashMap<>();
   private Map<Pair<Annotation, ?>, IAnnotation> m_annotations = new ConcurrentHashMap<>();
 
-  private IAnnotationTransformer m_transformer = null;
+  private IAnnotationTransformer m_transformer;
 
   @SuppressWarnings({"deprecation"})
   public JDK15AnnotationFinder(IAnnotationTransformer transformer) {
     m_transformer = transformer;
     m_annotationMap.put(IListenersAnnotation.class, Listeners.class);
-    m_annotationMap.put(IConfigurationAnnotation.class, Configuration.class);
     m_annotationMap.put(IDataProviderAnnotation.class, DataProvider.class);
-    m_annotationMap.put(IExpectedExceptionsAnnotation.class, ExpectedExceptions.class);
     m_annotationMap.put(IFactoryAnnotation.class, Factory.class);
     m_annotationMap.put(IObjectFactoryAnnotation.class, ObjectFactory.class);
     m_annotationMap.put(IParametersAnnotation.class, Parameters.class);
@@ -103,14 +98,20 @@ public class JDK15AnnotationFinder implements IAnnotationFinder {
 
   @Override
   public <A extends IAnnotation> A findAnnotation(Method m, Class<A> annotationClass) {
+    return findAnnotation(null, m, annotationClass);
+  }
+
+  @Override
+  public <A extends IAnnotation> A findAnnotation(Class<?> clazz, Method m, Class<A> annotationClass) {
     final Class<? extends Annotation> a = m_annotationMap.get(annotationClass);
     if (a == null) {
       throw new IllegalArgumentException("Java @Annotation class for '"
-          + annotationClass + "' not found.");
+              + annotationClass + "' not found.");
     }
     Annotation annotation = m.getAnnotation(a);
     return findAnnotation(m.getDeclaringClass(), annotation, annotationClass, null, null, m,
-        new Pair<>(annotation, m));
+            new Pair<>(annotation, m), clazz);
+
   }
 
   @Override
@@ -121,10 +122,8 @@ public class JDK15AnnotationFinder implements IAnnotationFinder {
             + annotationClass + "' not found.");
     }
     Method m = tm.getConstructorOrMethod().getMethod();
-    Class<?> testClass;
-    if (tm.getInstance() == null) {
-      testClass = m.getDeclaringClass();
-    } else {
+    Class<?> testClass = m.getDeclaringClass();
+    if (tm.getInstance() != null) {
       testClass = tm.getInstance().getClass();
     }
     Annotation annotation = m.getAnnotation(a);
@@ -132,7 +131,7 @@ public class JDK15AnnotationFinder implements IAnnotationFinder {
       annotation = testClass.getAnnotation(a);
     }
     return findAnnotation(testClass, annotation, annotationClass, null, null, m,
-        new Pair<>(annotation, m));
+        new Pair<>(annotation, m), null);
   }
 
   @Override
@@ -147,12 +146,18 @@ public class JDK15AnnotationFinder implements IAnnotationFinder {
   }
 
   private void transform(IAnnotation a, Class<?> testClass,
-                         Constructor<?> testConstructor, Method testMethod)  {
+                         Constructor<?> testConstructor, Method testMethod, Class<?> whichClass)  {
     //
     // Transform @Test
     //
     if (a instanceof ITestAnnotation) {
-      m_transformer.transform((ITestAnnotation) a, testClass, testConstructor, testMethod);
+      if (m_transformer instanceof org.testng.internal.annotations.IAnnotationTransformer) {
+        org.testng.internal.annotations.IAnnotationTransformer transformer =
+                (org.testng.internal.annotations.IAnnotationTransformer)m_transformer;
+        transformer.transform((ITestAnnotation) a, testClass, testConstructor, testMethod, whichClass);
+      } else {
+        m_transformer.transform((ITestAnnotation) a, testClass, testConstructor, testMethod);
+      }
     }
 
     else if (m_transformer instanceof IAnnotationTransformer2) {
@@ -202,7 +207,7 @@ public class JDK15AnnotationFinder implements IAnnotationFinder {
     }
     Annotation annotation = findAnnotationInSuperClasses(cls, a);
     return findAnnotation(cls, annotation, annotationClass, cls, null, null,
-        new Pair<>(annotation, annotationClass));
+        new Pair<>(annotation, annotationClass), null);
   }
 
   @Override
@@ -214,12 +219,13 @@ public class JDK15AnnotationFinder implements IAnnotationFinder {
     }
     Annotation annotation = cons.getAnnotation(a);
     return findAnnotation(cons.getDeclaringClass(), annotation, annotationClass, null, cons, null,
-        new Pair<>(annotation, cons));
+        new Pair<>(annotation, cons), null);
   }
 
   private <A extends IAnnotation> A findAnnotation(Class cls, Annotation a,
       Class<A> annotationClass, Class<?> testClass,
-      Constructor<?> testConstructor, Method testMethod, Pair<Annotation, ?> p) {
+      Constructor<?> testConstructor, Method testMethod, Pair<Annotation, ?> p,
+                                                   Class<?> whichClass) {
     if (a == null) {
       return null;
     }
@@ -228,7 +234,7 @@ public class JDK15AnnotationFinder implements IAnnotationFinder {
     if (result == null) {
       result = m_tagFactory.createTag(cls, testMethod, a, annotationClass, m_transformer);
       m_annotations.put(p, result);
-      transform(result, testClass, testConstructor, testMethod);
+      transform(result, testClass, testConstructor, testMethod, whichClass);
     }
     //noinspection unchecked
     return (A) result;

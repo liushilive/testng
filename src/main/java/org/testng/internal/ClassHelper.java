@@ -1,16 +1,5 @@
 package org.testng.internal;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.Vector;
-
 import org.testng.IClass;
 import org.testng.IMethodSelector;
 import org.testng.IObjectFactory;
@@ -18,13 +7,29 @@ import org.testng.IObjectFactory2;
 import org.testng.ITestObjectFactory;
 import org.testng.TestNGException;
 import org.testng.TestRunner;
-import org.testng.annotations.IAnnotation;
 import org.testng.annotations.IFactoryAnnotation;
 import org.testng.annotations.IParametersAnnotation;
+import org.testng.collections.Lists;
+import org.testng.collections.Maps;
 import org.testng.collections.Sets;
 import org.testng.internal.annotations.IAnnotationFinder;
+import org.testng.internal.reflect.ReflectionHelper;
 import org.testng.junit.IJUnitTestRunner;
+import org.testng.log4testng.Logger;
+import org.testng.xml.XmlClass;
+import org.testng.xml.XmlSuite;
 import org.testng.xml.XmlTest;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.Vector;
 
 /**
  * Utility class for different class manipulations.
@@ -34,23 +39,36 @@ public final class ClassHelper {
   private static final String JUNIT_4_TESTRUNNER = "org.testng.junit.JUnit4TestRunner";
 
   /** The additional class loaders to find classes in. */
-  private static final List<ClassLoader> m_classLoaders = new Vector<>();
+  private static final List<ClassLoader> classLoaders = new Vector<>();
+  private static final String CANNOT_INSTANTIATE_CLASS = "Cannot instantiate class ";
+  private static final String CLASS_HELPER = ClassHelper.class.getSimpleName();
+  private static final String SKIP_CALLER_CLS_LOADER = "skip.caller.clsLoader";
 
-  /** Add a class loader to the searchable loaders. */
-  public static void addClassLoader(final ClassLoader loader) {
-    m_classLoaders.add(loader);
-  }
+  /**
+   * When given a file name to form a class name, the file name is parsed and divided
+   * into segments. For example, "c:/java/classes/com/foo/A.class" would be divided
+   * into 6 segments {"C:" "java", "classes", "com", "foo", "A"}. The first segment
+   * actually making up the class name is [3]. This value is saved in lastGoodRootIndex
+   * so that when we parse the next file name, we will try 3 right away. If 3 fails we
+   * will take the long approach. This is just a optimization cache value.
+   */
+  private static int lastGoodRootIndex = -1;
 
   /** Hide constructor. */
   private ClassHelper() {
     // Hide Constructor
   }
 
+  /** Add a class loader to the searchable loaders. */
+  public static void addClassLoader(final ClassLoader loader) {
+    classLoaders.add(loader);
+  }
+
   public static <T> T newInstance(Class<T> clazz) {
     try {
       return clazz.newInstance();
     } catch(IllegalAccessException | InstantiationException | ExceptionInInitializerError | SecurityException e) {
-      throw new TestNGException("Cannot instantiate class " + clazz.getName(), e);
+      throw new TestNGException(CANNOT_INSTANTIATE_CLASS + clazz.getName(), e);
     }
   }
 
@@ -59,7 +77,7 @@ public final class ClassHelper {
       Constructor<T> constructor = clazz.getConstructor();
       return newInstance(constructor);
     } catch(ExceptionInInitializerError | SecurityException e) {
-      throw new TestNGException("Cannot instantiate class " + clazz.getName(), e);
+      throw new TestNGException(CANNOT_INSTANTIATE_CLASS + clazz.getName(), e);
     } catch (NoSuchMethodException e) {
       return null;
     }
@@ -69,7 +87,7 @@ public final class ClassHelper {
     try {
       return constructor.newInstance(parameters);
     } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
-      throw new TestNGException("Cannot instantiate class " + constructor.getDeclaringClass().getName(), e);
+      throw new TestNGException(CANNOT_INSTANTIATE_CLASS + constructor.getDeclaringClass().getName(), e);
     }
   }
 
@@ -84,12 +102,12 @@ public final class ClassHelper {
    * @return the class or null if the class is not found.
    */
   public static Class<?> forName(final String className) {
-    Vector<ClassLoader> allClassLoaders = new Vector<>();
+    List<ClassLoader> allClassLoaders = Lists.newArrayList();
     ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
     if (contextClassLoader != null) {
       allClassLoaders.add(contextClassLoader);
     }
-    allClassLoaders.addAll(m_classLoaders);
+    allClassLoaders.addAll(classLoaders);
 
     for (ClassLoader classLoader : allClassLoaders) {
       if (null == classLoader) {
@@ -100,10 +118,13 @@ public final class ClassHelper {
       }
       catch(ClassNotFoundException ex) {
         // With additional class loaders, it is legitimate to ignore ClassNotFoundException
-        if (m_classLoaders.isEmpty()) {
+        if (classLoaders.isEmpty()) {
           logClassNotFoundError(className, ex);
         }
       }
+    }
+    if (Boolean.parseBoolean(System.getProperty(SKIP_CALLER_CLS_LOADER))) {
+      return null;
     }
 
     try {
@@ -116,7 +137,7 @@ public final class ClassHelper {
   }
 
   private static void logClassNotFoundError(String className, Exception ex) {
-    Utils.log("ClassHelper", 2, "Could not instantiate " + className
+    Utils.log(CLASS_HELPER, 2, "Could not instantiate " + className
         + " : Class doesn't exist (" + ex.getMessage() + ")");
   }
 
@@ -159,50 +180,100 @@ public final class ClassHelper {
    * the Java access rules).
    */
   public static Set<Method> getAvailableMethods(Class<?> clazz) {
-    Set<Method> methods = Sets.newHashSet();
-    methods.addAll(Arrays.asList(clazz.getDeclaredMethods()));
-
-    Class<?> parent = clazz.getSuperclass();
-    while (null != parent) {
-      methods.addAll(extractMethods(clazz, parent, methods));
-      parent = parent.getSuperclass();
+    Map<String, Set<Method>> methods = Maps.newHashMap();
+    for (final Method declaredMethod : ReflectionHelper.getLocalMethods(clazz)) {
+      appendMethod(methods, declaredMethod);
     }
 
-    return methods;
+    Class<?> parent = clazz.getSuperclass();
+    if (null != parent) {
+      while (!Object.class.equals(parent)) {
+        Set<Map.Entry<String, Set<Method>>> extractedMethods = extractMethods(clazz, parent, methods).entrySet();
+        for (Map.Entry<String, Set<Method>> extractedMethod : extractedMethods) {
+          Set<Method> m = methods.get(extractedMethod.getKey());
+          if (m == null) {
+            methods.put(extractedMethod.getKey(), extractedMethod.getValue());
+          } else {
+            m.addAll(extractedMethod.getValue());
+          }
+        }
+        parent = parent.getSuperclass();
+      }
+    }
+
+    Set<Method> returnValue = Sets.newHashSet();
+    for (Set<Method> each : methods.values()) {
+      returnValue.addAll(each);
+    }
+    return returnValue;
   }
 
   public static IJUnitTestRunner createTestRunner(TestRunner runner) {
+    IJUnitTestRunner tr = null;
       try {
           //try to get runner for JUnit 4 first
-          Class.forName("org.junit.Test");
-          IJUnitTestRunner tr = (IJUnitTestRunner) ClassHelper.forName(JUNIT_4_TESTRUNNER).newInstance();
+        Class.forName("org.junit.Test");
+        Class<?> clazz = ClassHelper.forName(JUNIT_4_TESTRUNNER);
+        if (clazz != null) {
+          tr = (IJUnitTestRunner) clazz.newInstance();
           tr.setTestResultNotifier(runner);
-          return tr;
+        }
       } catch (Throwable t) {
-          Utils.log("ClassHelper", 2, "JUnit 4 was not found on the classpath");
+          Utils.log(CLASS_HELPER, 2, "JUnit 4 was not found on the classpath");
           try {
               //fallback to JUnit 3
               Class.forName("junit.framework.Test");
-              IJUnitTestRunner tr = (IJUnitTestRunner) ClassHelper.forName(JUNIT_TESTRUNNER).newInstance();
-              tr.setTestResultNotifier(runner);
-
-              return tr;
+              Class<?> clazz =ClassHelper.forName(JUNIT_TESTRUNNER);
+              if (clazz != null) {
+                tr = (IJUnitTestRunner) clazz.newInstance();
+                tr.setTestResultNotifier(runner);
+              }
           } catch (Exception ex) {
-              Utils.log("ClassHelper", 2, "JUnit 3 was not found on the classpath");
+              Utils.log(CLASS_HELPER, 2, "JUnit 3 was not found on the classpath");
               //there's no JUnit on the classpath
               throw new TestNGException("Cannot create JUnit runner", ex);
           }
       }
+      return tr;
   }
 
-  private static Set<Method> extractMethods(Class<?> childClass, Class<?> clazz,
-      Set<Method> collected) {
-    Set<Method> methods = Sets.newHashSet();
+  private static void appendMethod(Map<String, Set<Method>> methods, Method declaredMethod) {
+    Set<Method> declaredMethods = methods.get(declaredMethod.getName());
+    if (declaredMethods == null) {
+      declaredMethods = Sets.newHashSet();
+      methods.put(declaredMethod.getName(), declaredMethods);
+    }
+    declaredMethods.add(declaredMethod);
+  }
+
+  private static Map<String, Set<Method>> extractMethods(Class<?> childClass, Class<?> clazz,
+      Map<String, Set<Method>> collected) {
+    Map<String, Set<Method>> methods = Maps.newHashMap();
 
     Method[] declaredMethods = clazz.getDeclaredMethods();
 
     Package childPackage = childClass.getPackage();
     Package classPackage = clazz.getPackage();
+    boolean isSamePackage = isSamePackage(childPackage, classPackage);
+
+    for (Method method : declaredMethods) {
+      if (canInclude(isSamePackage, method, collected)) {
+        appendMethod(methods, method);
+      }
+    }
+
+    return methods;
+  }
+
+  private static boolean canInclude(boolean isSamePackage, Method method, Map<String, Set<Method>> collected) {
+    int methodModifiers = method.getModifiers();
+    boolean visible = (Modifier.isPublic(methodModifiers) || Modifier.isProtected(methodModifiers))
+        || (isSamePackage && !Modifier.isPrivate(methodModifiers));
+    boolean hasNoInheritanceTraits = !isOverridden(method, collected) && !Modifier.isAbstract(methodModifiers);
+    return visible && hasNoInheritanceTraits;
+  }
+
+  private static boolean isSamePackage(Package childPackage, Package classPackage) {
     boolean isSamePackage = false;
 
     if ((null == childPackage) && (null == classPackage)) {
@@ -211,30 +282,20 @@ public final class ClassHelper {
     if ((null != childPackage) && (null != classPackage)) {
       isSamePackage = childPackage.getName().equals(classPackage.getName());
     }
-
-    for (Method method : declaredMethods) {
-      int methodModifiers = method.getModifiers();
-      if ((Modifier.isPublic(methodModifiers) || Modifier.isProtected(methodModifiers))
-        || (isSamePackage && !Modifier.isPrivate(methodModifiers))) {
-        if (!isOverridden(method, collected) && !Modifier.isAbstract(methodModifiers)) {
-          methods.add(method);
-        }
-      }
-    }
-
-    return methods;
+    return isSamePackage;
   }
 
-  private static boolean isOverridden(Method method, Set<Method> collectedMethods) {
+  private static boolean isOverridden(Method method, Map<String, Set<Method>> methodsByName) {
+    Set<Method> collectedMethods = methodsByName.get(method.getName());
+    if (collectedMethods == null) {
+      return false;
+    }
     Class<?> methodClass = method.getDeclaringClass();
     Class<?>[] methodParams = method.getParameterTypes();
 
     for (Method m: collectedMethods) {
       Class<?>[] paramTypes = m.getParameterTypes();
-      if (method.getName().equals(m.getName())
-         && methodClass.isAssignableFrom(m.getDeclaringClass())
-         && methodParams.length == paramTypes.length) {
-
+      if (methodClass.isAssignableFrom(m.getDeclaringClass()) && methodParams.length == paramTypes.length) {
         boolean sameParameters = true;
         for (int i= 0; i < methodParams.length; i++) {
           if (!methodParams[i].equals(paramTypes[i])) {
@@ -346,7 +407,6 @@ public final class ClassHelper {
           }
           Object enclosingClassInstance = enclosingInstances[0];
 
-          // Utils.createInstance(ec, classes, xmlTest, finder);
           parameters = new Object[] { enclosingClassInstance };
         } // isStatic
 
@@ -356,7 +416,7 @@ public final class ClassHelper {
         }
         catch (NoSuchMethodException ex) {
           ct = declaringClass.getDeclaredConstructor(String.class);
-          parameters = new Object[] { "Default test name" };
+          parameters = new Object[] { xmlTest.getName() };
           // If ct == null here, we'll pass a null
           // constructor to the factory and hope it can deal with it
         }
@@ -365,9 +425,9 @@ public final class ClassHelper {
     }
     catch (TestNGException ex) {
       throw ex;
-//      throw new TestNGException("Couldn't instantiate class:" + declaringClass);
     }
     catch (NoSuchMethodException ex) {
+      //Empty catch block
     }
     catch (Throwable cause) {
       // Something else went wrong when running the constructor
@@ -375,14 +435,10 @@ public final class ClassHelper {
           + declaringClass.getName() + ": " + cause.getMessage(), cause);
     }
 
-    if (result == null) {
-      if (! Modifier.isPublic(declaringClass.getModifiers())) {
-        //result should not be null
-        throw new TestNGException("An error occurred while instantiating class "
-            + declaringClass.getName() + ". Check to make sure it can be accessed/instantiated.");
-//      } else {
-//        Utils.log(ClassHelper.class.getName(), 2, "Couldn't instantiate class " + declaringClass);
-      }
+    if (result == null && ! Modifier.isPublic(declaringClass.getModifiers())) {
+      //result should not be null
+      throw new TestNGException("An error occurred while instantiating class "
+          + declaringClass.getName() + ". Check to make sure it can be accessed/instantiated.");
     }
 
     return result;
@@ -396,14 +452,14 @@ public final class ClassHelper {
     Class<?> result = null;
 
     String className = declaringClass.getName();
-    int index = className.indexOf("$");
+    int index = className.indexOf('$');
     if (index != -1) {
       String ecn = className.substring(0, index);
       try {
         result = Class.forName(ecn);
       }
       catch (ClassNotFoundException e) {
-        e.printStackTrace();
+        Logger.getLogger(ClassHelper.class).error(e.getMessage(),e);
       }
     }
 
@@ -465,15 +521,6 @@ public final class ClassHelper {
     return result;
   }
 
-  /**
-   * When given a file name to form a class name, the file name is parsed and divided
-   * into segments. For example, "c:/java/classes/com/foo/A.class" would be divided
-   * into 6 segments {"C:" "java", "classes", "com", "foo", "A"}. The first segment
-   * actually making up the class name is [3]. This value is saved in m_lastGoodRootIndex
-   * so that when we parse the next file name, we will try 3 right away. If 3 fails we
-   * will take the long approach. This is just a optimization cache value.
-   */
-  private static int m_lastGoodRootIndex = -1;
 
   /**
    * Returns the Class object corresponding to the given name. The name may be
@@ -510,17 +557,6 @@ public final class ClassHelper {
     int classIndex = file.lastIndexOf(".class");
     if (-1 == classIndex) {
       classIndex = file.lastIndexOf(".java");
-//
-//      if(-1 == classIndex) {
-//        result = ClassHelper.forName(file);
-//
-//        if (null == result) {
-//          throw new TestNGException("Cannot load class from file: " + file);
-//        }
-//
-//        return result;
-//      }
-//
     }
 
     // Transforms the file name into a class name.
@@ -529,19 +565,18 @@ public final class ClassHelper {
     String shortFileName = file.substring(0, classIndex);
 
     // Split file name into segments. For example "c:/java/classes/com/foo/A"
-    // becomes {"c:", "java", "classes", "com", "foo", "A"}
     String[] segments = shortFileName.split("[/\\\\]", -1);
 
     //
     // Check if the last good root index works for this one. For example, if the previous
-    // name was "c:/java/classes/com/foo/A.class" then m_lastGoodRootIndex is 3 and we
-    // try to make a class name ignoring the first m_lastGoodRootIndex segments (3). This
+    // name was "c:/java/classes/com/foo/A.class" then lastGoodRootIndex is 3 and we
+    // try to make a class name ignoring the first lastGoodRootIndex segments (3). This
     // will succeed rapidly if the path is the same as the one from the previous name.
     //
-    if (-1 != m_lastGoodRootIndex) {
+    if (-1 != lastGoodRootIndex) {
 
-      StringBuilder className = new StringBuilder(segments[m_lastGoodRootIndex]);
-      for (int i = m_lastGoodRootIndex + 1; i < segments.length; i++) {
+      StringBuilder className = new StringBuilder(segments[lastGoodRootIndex]);
+      for (int i = lastGoodRootIndex + 1; i < segments.length; i++) {
         className.append(".").append(segments[i]);
       }
 
@@ -559,20 +594,19 @@ public final class ClassHelper {
     // resolves.  When it does, we remember the path we are at as "lastGoodRoodIndex".
     //
 
-    // TODO CQ use a StringBuffer here
-    String className = null;
+    String className = "";
     for (int i = segments.length - 1; i >= 0; i--) {
-      if (null == className) {
+      if (className.length() == 0) {
         className = segments[i];
       }
       else {
-        className = segments[i] + "." + className;
+        className = segments[i] + "."  + className;
       }
 
       result = ClassHelper.forName(className);
 
       if (null != result) {
-        m_lastGoodRootIndex = i;
+        lastGoodRootIndex = i;
         break;
       }
     }
@@ -582,6 +616,34 @@ public final class ClassHelper {
     }
 
     return result;
+  }
+
+  /**
+   * @param cls   - The class to look for.
+   * @param suite - The {@link XmlSuite} whose &lt;test&gt; tags needs to be searched in.
+   * @return - All the {@link XmlClass} objects that share the same &lt;test&gt; tag as the class.
+   */
+  public static XmlClass[] findClassesInSameTest(Class<?> cls, XmlSuite suite) {
+    Collection<XmlClass> vResult = Sets.newHashSet();
+    for (XmlTest test : suite.getTests()) {
+      vResult.addAll(findClassesInSameTest(cls, test));
+    }
+
+    return vResult.toArray(new XmlClass[vResult.size()]);
+  }
+
+  private static Collection<XmlClass> findClassesInSameTest(Class<?> cls, XmlTest xmlTest) {
+    Collection<XmlClass> vResult = Sets.newHashSet();
+    String className = cls.getName();
+    for (XmlClass testClass : xmlTest.getXmlClasses()) {
+      if (testClass.getName().equals(className)) {
+        // Found it, add all the classes in this test in the result
+        vResult.addAll(xmlTest.getXmlClasses());
+        break;
+      }
+    }
+
+    return vResult;
   }
 
 }

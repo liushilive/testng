@@ -23,11 +23,6 @@ public class MethodInstance implements IMethodInstance {
   }
 
   @Override
-  public Object[] getInstances() {
-    return new Object[] { getInstance() };
-  }
-
-  @Override
   public Object getInstance() {
     return m_method.getInstance();
   }

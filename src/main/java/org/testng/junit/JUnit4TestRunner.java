@@ -123,6 +123,8 @@ public class JUnit4TestRunner implements IJUnitTestRunner {
         public void testAssumptionFailure(Failure failure) {
             notified.add(failure.getDescription());
             ITestResult tr = m_findedMethods.get(failure.getDescription());
+            validate(tr, failure.getDescription());
+            runAfterInvocationListeners(tr);
             tr.setStatus(TestResult.SKIP);
             tr.setEndMillis(Calendar.getInstance().getTimeInMillis());
             tr.setThrowable(failure.getException());
@@ -134,6 +136,9 @@ public class JUnit4TestRunner implements IJUnitTestRunner {
 
         @Override
         public void testFailure(Failure failure) throws Exception {
+            if (failure == null) {
+                return;
+            }
             if (isAssumptionFailed(failure)) {
                 this.testAssumptionFailure(failure);
                 return;
@@ -143,6 +148,7 @@ public class JUnit4TestRunner implements IJUnitTestRunner {
             if (tr == null) {
                 // Not a test method, should be a config
                 tr = createTestResult(failure.getDescription());
+                runAfterInvocationListeners(tr);
                 tr.setStatus(TestResult.FAILURE);
                 tr.setEndMillis(Calendar.getInstance().getTimeInMillis());
                 tr.setThrowable(failure.getException());
@@ -153,6 +159,7 @@ public class JUnit4TestRunner implements IJUnitTestRunner {
                     testIgnored(childDesc);
                 }
             } else {
+                runAfterInvocationListeners(tr);
                 tr.setStatus(TestResult.FAILURE);
                 tr.setEndMillis(Calendar.getInstance().getTimeInMillis());
                 tr.setThrowable(failure.getException());
@@ -166,6 +173,8 @@ public class JUnit4TestRunner implements IJUnitTestRunner {
         @Override
         public void testFinished(Description description) throws Exception {
             ITestResult tr = m_findedMethods.get(description);
+            validate(tr, description);
+            runAfterInvocationListeners(tr);
             if (!notified.contains(description)) {
                 tr.setStatus(TestResult.SUCCESS);
                 tr.setEndMillis(Calendar.getInstance().getTimeInMillis());
@@ -182,6 +191,8 @@ public class JUnit4TestRunner implements IJUnitTestRunner {
             if (!notified.contains(description)) {
                 notified.add(description);
                 ITestResult tr = m_findedMethods.get(description);
+                validate(tr, description);
+                runAfterInvocationListeners(tr);
                 tr.setStatus(TestResult.SKIP);
                 tr.setEndMillis(tr.getStartMillis());
                 m_parentRunner.addSkippedTest(tr.getMethod(), tr);
@@ -198,14 +209,33 @@ public class JUnit4TestRunner implements IJUnitTestRunner {
 
         @Override
         public void testRunStarted(Description description) throws Exception {
+
         }
 
         @Override
         public void testStarted(Description description) throws Exception {
             ITestResult tr = m_findedMethods.get(description);
+            validate(tr, description);
             for (ITestListener l : m_listeners) {
                 l.onTestStart(tr);
             }
+        }
+
+        private void  runAfterInvocationListeners(ITestResult tr) {
+            InvokedMethod im = new InvokedMethod(tr.getTestClass(), tr.getMethod(), tr.getEndMillis(), tr);
+            for (IInvokedMethodListener l: m_invokeListeners) {
+                l.afterInvocation(im, tr);
+            }
+        }
+
+        private void validate(ITestResult tr, Description description) {
+            if (tr == null) {
+                throw new TestNGException(stringify(description));
+            }
+        }
+
+        private String stringify(Description description) {
+            return description.getClassName() + "." + description.getMethodName() + "()";
         }
     }
 
@@ -230,9 +260,6 @@ public class JUnit4TestRunner implements IJUnitTestRunner {
     }
 
     private static boolean isAssumptionFailed(Failure failure) {
-        if (failure == null) {
-            return false;
-        }
         //noinspection ThrowableResultOfMethodCallIgnored
         final Throwable exception = failure.getException();
         //noinspection SimplifiableIfStatement

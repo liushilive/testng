@@ -2,12 +2,24 @@ package test.listeners;
 
 import org.testng.*;
 import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 import org.testng.collections.Lists;
 
+import org.testng.xml.XmlSuite;
 import test.SimpleBaseTest;
+import test.listeners.github1029.Issue1029InvokedMethodListener;
+import test.listeners.github1029.Issue1029SampleTestClassWithDataDrivenMethod;
+import test.listeners.github1029.Issue1029SampleTestClassWithFiveInstances;
+import test.listeners.github1029.Issue1029SampleTestClassWithFiveMethods;
+import test.listeners.github1029.Issue1029SampleTestClassWithOneMethod;
+import test.listeners.github1393.Listener1393;
+import test.listeners.github956.ListenerFor956;
+import test.listeners.github956.TestClassContainer;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
@@ -218,9 +230,9 @@ public class ListenerTest extends SimpleBaseTest {
     MultiListener listener = new MultiListener();
     TestNG tng = create(SimpleSample.class);
     // Keep using deprecated addListener methods. It is what the test is testing
-    tng.addListener((ISuiteListener) listener);
-    tng.addListener((ITestListener) listener);
-    tng.addInvokedMethodListener(listener);
+    tng.addListener((ITestNGListener) listener);
+    tng.addListener((ITestNGListener) listener);
+    tng.addListener((ITestNGListener) listener);
     tng.run();
     Assert.assertEquals(listener.getOnSuiteStartCount(), 1);
     Assert.assertEquals(listener.getOnSuiteFinishCount(), 1);
@@ -230,5 +242,56 @@ public class ListenerTest extends SimpleBaseTest {
     Assert.assertEquals(listener.getAfterInvocationCount(), 1);
     Assert.assertEquals(listener.getOnMethodTestStartCount(), 1);
     Assert.assertEquals(listener.getOnMethodTestSuccessCount(), 1);
+  }
+
+  @Test
+  public void testListenerCallInvocation() {
+    XmlSuite suite = createXmlSuite("suite956", "test956", TestClassContainer.FirstTestClass.class,
+        TestClassContainer.SecondTestClass.class);
+    TestNG tng = create(suite);
+    ListenerFor956 listener = new ListenerFor956();
+    tng.addListener((ITestNGListener) listener);
+    tng.run();
+    List<String> messages = listener.getMessages();
+    Assert.assertEquals(messages.size(), 1);
+    Assert.assertEquals(messages.get(0), "Executing test956");
+  }
+
+  @Test(description = "GITHUB-1393: fail a test from onTestStart method")
+  public void testFailATestFromOnTestStart() {
+    TestNG tng = create(SimpleSample.class);
+    TestListenerAdapter adapter = new TestListenerAdapter();
+    tng.addListener((ITestNGListener) adapter);
+    tng.addListener((ITestNGListener) new Listener1393());
+    tng.run();
+    Assert.assertEquals(adapter.getPassedTests().size(), 0);
+    Assert.assertEquals(adapter.getFailedTests().size(), 1);
+  }
+
+  @Test(dataProvider = "dp", description ="GITHUB-1029" )
+  public void ensureXmlTestIsNotNull(Class<?> clazz, XmlSuite.ParallelMode mode) {
+    XmlSuite xmlSuite = createXmlSuite("Suite");
+    createXmlTest(xmlSuite, "GITHUB-1029-Test", clazz);
+    xmlSuite.setParallel(mode);
+    Issue1029InvokedMethodListener listener = new Issue1029InvokedMethodListener();
+    TestNG testng = create(xmlSuite);
+    testng.addListener((ITestNGListener) listener);
+    testng.setThreadCount(10);
+    testng.setDataProviderThreadCount(10);
+    testng.run();
+    List<String> expected = Collections.nCopies(5, "GITHUB-1029-Test");
+    assertThat(listener.getBeforeInvocation()).containsExactlyElementsOf(expected);
+    assertThat(listener.getAfterInvocation()).containsExactlyElementsOf(expected);
+  }
+
+  @DataProvider(name = "dp")
+  public Object[][] getData() {
+    return new Object[][]{
+            {Issue1029SampleTestClassWithFiveMethods.class, XmlSuite.ParallelMode.METHODS},
+            {Issue1029SampleTestClassWithOneMethod.class, XmlSuite.ParallelMode.METHODS},
+            {Issue1029SampleTestClassWithDataDrivenMethod.class, XmlSuite.ParallelMode.METHODS},
+            {Issue1029SampleTestClassWithFiveInstances.class, XmlSuite.ParallelMode.INSTANCES}
+
+    };
   }
 }
